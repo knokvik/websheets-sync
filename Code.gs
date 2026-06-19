@@ -11,7 +11,7 @@ var EXA_AGENT_CONFIG = {
   defaultRows: 50
 };
 
-var EXA_AGENT_VALID_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'auto'];
+var EXA_AGENT_VALID_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'auto'];
 
 /**
  * Makes an HTTP request with exponential backoff retry on rate limit (429) errors.
@@ -75,7 +75,7 @@ function showAbout() {
   var ui = SpreadsheetApp.getUi();
   var message = 'Exa AI for Google Sheets\n\n' +
                 'Version: 2.0.5\n\n' +
-                'Use Exa Agent to fill a table from a prompt.\n\n' +
+                'Use Exa Agent to generate tables and fill blank cells.\n\n' +
                 'Use the EXA formula inside a cell when you want one answer.\n\n' +
                 'Open the sidebar to add your API key and start using Exa.\n\n' +
                 'Learn more at https://exa.ai';
@@ -1279,7 +1279,9 @@ function startAgentTableRun(config) {
       message: 'Start cell must be a single cell like A1 or D5.'
     };
   }
-  var startCell = requestedStartCell || getCurrentAgentStartCell();
+  var sheet = SpreadsheetApp.getActiveSheet();
+  var sheetContext = getAgentSheetContext(sheet);
+  var startCell = requestedStartCell || getCurrentAgentStartCell(sheet);
   var outputSchema = buildAgentTableOutputSchema(columns, rowLimit);
 
   var payload = {
@@ -1326,7 +1328,9 @@ function startAgentTableRun(config) {
           columns: columns,
           rowLimit: rowLimit,
           autoColumns: autoColumns,
-          startCell: startCell
+          startCell: startCell,
+          sheetId: sheetContext.sheetId,
+          sheetName: sheetContext.sheetName
         }
       };
     }
@@ -1339,6 +1343,1026 @@ function startAgentTableRun(config) {
     Logger.log('startAgentTableRun Error: ' + e);
     return { success: false, message: 'Script Error: ' + e.message };
   }
+}
+
+/**
+ * Builds fill jobs from the active selection without starting Agent runs.
+ * Called from the sidebar before queueing one or more Agent fill runs.
+ *
+ * @param {Object} config Sidebar options
+ * @return {Object} Fill preparation result
+ */
+function prepareAgentFillJobs(config) {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    return {
+      success: false,
+      message: 'No API key set. Please set your API key in the Exa AI sidebar.'
+    };
+  }
+
+  config = config || {};
+  try {
+    var sheet = SpreadsheetApp.getActiveSheet();
+    var selection = sheet && sheet.getActiveRange ? sheet.getActiveRange() : null;
+    if (!selection) {
+      return { success: false, message: 'Select cells to fill first.' };
+    }
+
+    var result = buildAgentFillJobsFromSelection(sheet, selection, {
+      overwrite: config.overwrite === true,
+      instructions: readAgentFillInstructions(config.instructions)
+    });
+
+    if (!result.success) {
+      return result;
+    }
+
+    return {
+      success: true,
+      message: 'Ready to fill selection.',
+      jobs: result.jobs,
+      totalCells: result.totalCells,
+      totalJobs: result.jobs.length,
+      selectedRange: result.selectedRange || '',
+      skippedCells: result.skippedCells || 0
+    };
+  } catch (e) {
+    Logger.log('prepareAgentFillJobs Error: ' + e);
+    return { success: false, message: 'Could not read the selected cells. Try selecting the cells again.' };
+  }
+}
+
+/**
+ * Starts one Agent run for a prepared fill job.
+ *
+ * @param {Object} job Prepared fill job
+ * @param {Object} config Sidebar options
+ * @return {Object} Result with run summary and fill config
+ */
+function startAgentFillRun(job, config) {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    return { success: false, message: 'No API key set.' };
+  }
+
+  job = job || {};
+  config = config || {};
+  if (!Array.isArray(job.targets) || job.targets.length === 0) {
+    return { success: false, message: 'No blank cells selected.' };
+  }
+
+  var effort = normalizeAgentEffort(config.effort);
+  var instructions = readAgentFillInstructions(config.instructions || job.instructions);
+  var isContinueTable = job.mode === 'continue-table';
+  var payload = {
+    query: isContinueTable ? buildAgentContinueTablePrompt(job, instructions) : buildAgentFillPrompt(job, instructions),
+    systemPrompt: isContinueTable
+      ? 'You are continuing a Google Sheets table. Return concise, verified cell values and satisfy the provided JSON schema.'
+      : 'You are filling selected cells in a Google Sheet. Return concise, verified values and satisfy the provided JSON schema.',
+    input: {
+      data: job.inputRows || []
+    },
+    outputSchema: buildAgentFillOutputSchema(job),
+    effort: effort,
+    metadata: {
+      integration: 'exa-for-sheets',
+      mode: isContinueTable ? 'agent-continue-table' : 'agent-fill',
+      jobId: String(job.jobId || ''),
+      targetCells: String(job.targets.length),
+      targetRows: String(countUniqueAgentFillRows(job.targets)),
+      fields: (job.fields || []).map(function(field) { return field.fieldId; }).join(','),
+      overwrite: String(job.overwrite === true)
+    }
+  };
+
+  try {
+    var response = fetchWithRetry(EXA_AGENT_CONFIG.endpoint, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      headers: {
+        'x-api-key': apiKey,
+        'Exa-Beta': EXA_AGENT_CONFIG.betaHeader,
+        'x-exa-integration': 'exa-for-sheets',
+        'User-Agent': 'exa-for-sheets 2.0'
+      },
+      muteHttpExceptions: true
+    });
+
+    var responseCode = response.getResponseCode();
+    var responseBody = response.getContentText();
+
+    if (responseCode === 200) {
+      var run = JSON.parse(responseBody);
+      return {
+        success: true,
+        message: 'Fill started.',
+        run: summarizeAgentRun(run),
+        fillConfig: sanitizeAgentFillConfig(job)
+      };
+    }
+
+    return {
+      success: false,
+      message: parseAgentApiError(responseCode, responseBody, 'Failed to start fill run.')
+    };
+  } catch (e) {
+    Logger.log('startAgentFillRun Error: ' + e);
+    return { success: false, message: 'Script Error: ' + e.message };
+  }
+}
+
+/**
+ * Writes a completed Agent fill run back into selected target cells.
+ *
+ * @param {string} runId Exa Agent run ID
+ * @param {Object} fillConfig Fill config returned by startAgentFillRun
+ * @return {Object} Write result
+ */
+function writeAgentFillRunToSheet(runId, fillConfig) {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    return { success: false, message: 'No API key set.' };
+  }
+
+  var fetched = fetchAgentRun(apiKey, runId);
+  if (!fetched.success) {
+    return fetched;
+  }
+
+  var run = fetched.run;
+  if (run.status !== 'completed') {
+    return {
+      success: false,
+      message: 'Agent run is not complete yet. Current status: ' + run.status
+    };
+  }
+
+  var extracted = extractAgentFillValues(run, fillConfig || {});
+  if (!extracted.success) {
+    return extracted;
+  }
+
+  try {
+    var sheetResult = getAgentWriteSheet(fillConfig || {});
+    if (!sheetResult.success) {
+      return sheetResult;
+    }
+
+    var sheet = sheetResult.sheet;
+    var filled = 0;
+    var blank = 0;
+    var skipped = 0;
+    var overwrite = fillConfig && fillConfig.overwrite === true;
+
+    extracted.targets.forEach(function(target) {
+      var cellRange = sheet.getRange(target.row, target.column);
+      var currentValue = cellRange.getValue ? cellRange.getValue() : '';
+      var currentFormula = cellRange.getFormula ? cellRange.getFormula() : '';
+      if (!overwrite && !isAgentFillCellBlank(currentValue, currentFormula)) {
+        skipped++;
+        return;
+      }
+
+      if (target.value === '' || target.value === null || target.value === undefined) {
+        blank++;
+        return;
+      }
+
+      cellRange.setValue(formatAgentCellValue(target.value));
+      filled++;
+    });
+
+    SpreadsheetApp.flush();
+
+    return {
+      success: true,
+      message: blank > 0 || skipped > 0 ? 'Done. Some cells were left blank.' : 'Done.',
+      runId: run.id,
+      filled: filled,
+      blank: blank,
+      skipped: skipped,
+      costDollars: run.costDollars || null,
+      usage: run.usage || null
+    };
+  } catch (e) {
+    Logger.log('writeAgentFillRunToSheet Error: ' + e);
+    return { success: false, message: 'Could not write the filled cells. Try again.' };
+  }
+}
+
+/**
+ * Builds prepared fill jobs from an active range.
+ *
+ * @param {Sheet} sheet Active sheet
+ * @param {Range} selection Active selection
+ * @param {Object} options Fill options
+ * @return {Object} Jobs result
+ */
+function buildAgentFillJobsFromSelection(sheet, selection, options) {
+  options = options || {};
+  var overwrite = options.overwrite === true;
+  var startRow = selection.getRow();
+  var startCol = selection.getColumn();
+  var numRows = selection.getNumRows ? selection.getNumRows() : 1;
+  var numCols = selection.getNumColumns ? selection.getNumColumns() : 1;
+  var endRow = startRow + numRows - 1;
+  var endCol = startCol + numCols - 1;
+  var selectionValues = selection.getValues ? selection.getValues() : [[selection.getValue ? selection.getValue() : '']];
+  var selectionFormulas = selection.getFormulas ? selection.getFormulas() : createBlankMatrix(numRows, numCols);
+  var lastRow = Math.max(endRow, sheet.getLastRow ? sheet.getLastRow() : endRow);
+  var lastCol = Math.max(endCol, sheet.getLastColumn ? sheet.getLastColumn() : endCol);
+  var scanEndCol = Math.min(lastCol, Math.max(endCol, 50));
+  var scanNumCols = scanEndCol;
+  var headerRow = detectAgentFillHeaderRow(sheet, startRow, startCol, endCol, scanNumCols);
+  var table = buildAgentFillTableInfo(sheet, headerRow, startCol, endCol, scanNumCols, startRow, endRow);
+  var tableValues = readSheetValues(sheet, table.dataStartRow, table.startCol, table.dataEndRow - table.dataStartRow + 1, table.endCol - table.startCol + 1);
+  var rowContexts = buildAgentFillRowContexts(tableValues, table.dataStartRow, table);
+  var rowContextByNumber = {};
+  rowContexts.forEach(function(rowContext) {
+    rowContextByNumber[rowContext.rowNumber] = rowContext;
+  });
+
+  var targets = [];
+  var continuationCandidates = [];
+  var skippedCells = 0;
+  var blankCandidateCells = 0;
+  var cellsWithoutRowContext = 0;
+  for (var rowOffset = 0; rowOffset < numRows; rowOffset++) {
+    for (var colOffset = 0; colOffset < numCols; colOffset++) {
+      var row = startRow + rowOffset;
+      var col = startCol + colOffset;
+      if (headerRow && row === headerRow) {
+        skippedCells++;
+        continue;
+      }
+
+      var value = selectionValues[rowOffset] ? selectionValues[rowOffset][colOffset] : '';
+      var formula = selectionFormulas[rowOffset] ? selectionFormulas[rowOffset][colOffset] : '';
+      if (!overwrite && !isAgentFillCellBlank(value, formula)) {
+        skippedCells++;
+        continue;
+      }
+
+      blankCandidateCells++;
+      var field = table.fieldByColumn[col] || createAgentFillFallbackField(col);
+      var target = {
+        cell: formatCellA1(row, col),
+        row: row,
+        column: col,
+        rowId: createAgentFillRowId(row),
+        fieldId: field.fieldId,
+        title: field.title,
+        columnLetter: formatColumnLabel(col)
+      };
+      var rowContext = rowContextByNumber[row];
+      if (!rowContext || !rowHasAgentFillContext(rowContext)) {
+        cellsWithoutRowContext++;
+        continuationCandidates.push(target);
+        continue;
+      }
+
+      targets.push(target);
+    }
+  }
+
+  var selectedRange = selection.getA1Notation ? selection.getA1Notation() : formatRangeA1(startRow, startCol, numRows, numCols);
+  var jobs = buildAgentFillRowJobs({
+    targets: targets,
+    table: table,
+    rowContexts: rowContexts,
+    rowContextByNumber: rowContextByNumber,
+    sheet: sheet,
+    selectedRange: selectedRange,
+    overwrite: overwrite,
+    instructions: readAgentFillInstructions(options.instructions)
+  });
+  var continuation = buildAgentContinueTableJobs({
+    candidates: continuationCandidates,
+    table: table,
+    rowContexts: rowContexts,
+    rowContextByNumber: rowContextByNumber,
+    sheet: sheet,
+    selectedRange: selectedRange,
+    overwrite: overwrite,
+    instructions: readAgentFillInstructions(options.instructions)
+  });
+
+  if (continuation.success) {
+    jobs = jobs.concat(continuation.jobs);
+    skippedCells += continuation.skippedCells || 0;
+  } else {
+    skippedCells += continuationCandidates.length;
+  }
+
+  if (jobs.length === 0) {
+    if (blankCandidateCells > 0 && cellsWithoutRowContext === blankCandidateCells) {
+      return {
+        success: false,
+        message: 'Select blanks in rows that already have some data.'
+      };
+    }
+    return { success: false, message: overwrite ? 'No fillable cells selected.' : 'No blank cells selected.' };
+  }
+
+  return {
+    success: true,
+    jobs: jobs,
+    totalCells: targets.length + (continuation.success ? continuation.totalCells : 0),
+    selectedRange: selectedRange,
+    skippedCells: skippedCells
+  };
+}
+
+function buildAgentFillRowJobs(args) {
+  var targets = args.targets || [];
+  if (targets.length === 0) {
+    return [];
+  }
+
+  var selectedRows = uniqueNumbers(targets.map(function(target) { return target.row; }));
+  var selectedFields = uniqueAgentFillFields(targets, args.table);
+  var exampleRows = pickAgentFillExampleRows(args.rowContexts, selectedRows, 5);
+  var chunkSize = selectedFields.length <= 1 ? 10 : (selectedRows.length === 1 ? 1 : 3);
+  var rowChunks = chunkArray(selectedRows, chunkSize);
+
+  return rowChunks.map(function(rowChunk, index) {
+    var rowSet = {};
+    rowChunk.forEach(function(row) { rowSet[row] = true; });
+    var jobTargets = targets.filter(function(target) { return rowSet[target.row] === true; });
+    var jobFields = uniqueAgentFillFields(jobTargets, args.table);
+    var jobRows = rowChunk.map(function(row) { return args.rowContextByNumber[row]; }).filter(Boolean);
+    return {
+      jobId: 'fill_' + (index + 1),
+      mode: 'fill',
+      sheetId: args.sheet.getSheetId ? args.sheet.getSheetId() : null,
+      sheetName: args.sheet.getName ? args.sheet.getName() : '',
+      selectedRange: args.selectedRange,
+      overwrite: args.overwrite,
+      instructions: args.instructions,
+      headerRow: args.table.headerRow || null,
+      fields: jobFields,
+      targets: jobTargets,
+      inputRows: jobRows.concat(exampleRows),
+      targetRowIds: rowChunk.map(createAgentFillRowId)
+    };
+  });
+}
+
+function buildAgentContinueTableJobs(args) {
+  var candidates = args.candidates || [];
+  if (candidates.length === 0) {
+    return { success: false, jobs: [], totalCells: 0 };
+  }
+
+  var table = args.table || {};
+  if (!table.headerRow || !Array.isArray(table.fields) || table.fields.length < 2) {
+    return { success: false, jobs: [], totalCells: 0 };
+  }
+
+  var targets = candidates.filter(function(target) {
+    var field = table.fieldByColumn && table.fieldByColumn[target.column];
+    return field && field.hasHeader === true;
+  });
+  var skippedCells = candidates.length - targets.length;
+  if (targets.length === 0) {
+    return { success: false, jobs: [], totalCells: 0 };
+  }
+
+  var selectedRows = uniqueNumbers(targets.map(function(target) { return target.row; }));
+  if (selectedRows.length === 0) {
+    return { success: false, jobs: [], totalCells: 0 };
+  }
+
+  var allSelectedRowsAreBlank = selectedRows.every(function(row) {
+    return !rowHasAgentFillContext(args.rowContextByNumber[row]);
+  });
+  if (!allSelectedRowsAreBlank) {
+    return { success: false, jobs: [], totalCells: 0 };
+  }
+
+  var exampleRows = pickAgentContinueTableExampleRows(args.rowContexts, selectedRows, 10);
+  if (exampleRows.length < 2) {
+    return { success: false, jobs: [], totalCells: 0 };
+  }
+
+  var firstSelectedRow = selectedRows[0];
+  var lastExampleRow = Math.max.apply(null, exampleRows.map(function(row) { return row.rowNumber || 0; }));
+  if (!lastExampleRow || firstSelectedRow > lastExampleRow + 5) {
+    return { success: false, jobs: [], totalCells: 0 };
+  }
+
+  var fields = uniqueAgentFillFields(targets, table);
+  return {
+    success: true,
+    totalCells: targets.length,
+    skippedCells: skippedCells,
+    jobs: [{
+      jobId: 'continue_1',
+      mode: 'continue-table',
+      sheetId: args.sheet.getSheetId ? args.sheet.getSheetId() : null,
+      sheetName: args.sheet.getName ? args.sheet.getName() : '',
+      selectedRange: args.selectedRange,
+      overwrite: args.overwrite,
+      instructions: args.instructions,
+      headerRow: table.headerRow || null,
+      fields: fields,
+      targets: targets,
+      inputRows: exampleRows,
+      targetRowIds: selectedRows.map(createAgentFillRowId)
+    }]
+  };
+}
+
+/**
+ * Starts from the selection and finds the nearest likely header row above it.
+ */
+function detectAgentFillHeaderRow(sheet, selectionStartRow, selectionStartCol, selectionEndCol, scanNumCols) {
+  if (selectionStartRow <= 1) {
+    return 0;
+  }
+
+  var scanStartRow = Math.max(1, selectionStartRow - 500);
+  var scanRows = selectionStartRow - scanStartRow;
+  if (scanRows <= 0) {
+    return 0;
+  }
+
+  var values = readSheetValues(sheet, scanStartRow, 1, scanRows, scanNumCols);
+  var topOfBlockIndex = values.length - 1;
+  while (topOfBlockIndex >= 0 && countNonEmptyCells([values[topOfBlockIndex]]) > 0) {
+    topOfBlockIndex--;
+  }
+
+  var candidateIndex = topOfBlockIndex + 1;
+  if (candidateIndex < values.length) {
+    var candidateRow = values[candidateIndex];
+    var candidateCount = countNonEmptyCells([candidateRow]);
+    if (candidateCount >= 2 && (scanStartRow === 1 || candidateIndex > 0)) {
+      return scanStartRow + candidateIndex;
+    }
+  }
+
+  var frozenHeaderRow = getLikelyFrozenHeaderRow(sheet, selectionStartRow, scanNumCols);
+  if (frozenHeaderRow) {
+    return frozenHeaderRow;
+  }
+
+  var topHeaderRow = getLikelyTopHeaderRow(sheet, selectionStartRow, scanNumCols);
+  if (topHeaderRow) {
+    return topHeaderRow;
+  }
+
+  if (selectionStartRow > 1) {
+    var firstRow = readSheetValues(sheet, 1, 1, 1, scanNumCols)[0] || [];
+    if (countNonEmptyCells([firstRow]) >= 2) {
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
+/**
+ * Uses frozen rows as a strong hint for sheets with long tables.
+ */
+function getLikelyFrozenHeaderRow(sheet, selectionStartRow, scanNumCols) {
+  try {
+    var frozenRows = sheet.getFrozenRows ? sheet.getFrozenRows() : 0;
+    if (!frozenRows || frozenRows >= selectionStartRow) {
+      return 0;
+    }
+
+    var frozenRow = readSheetValues(sheet, frozenRows, 1, 1, scanNumCols)[0] || [];
+    return countNonEmptyCells([frozenRow]) >= 2 ? frozenRows : 0;
+  } catch (e) {
+    Logger.log('getLikelyFrozenHeaderRow skipped: ' + e);
+    return 0;
+  }
+}
+
+/**
+ * Finds a likely table header near the top of the sheet for long selections.
+ */
+function getLikelyTopHeaderRow(sheet, selectionStartRow, scanNumCols) {
+  var rowsToCheck = Math.min(20, selectionStartRow - 1);
+  if (rowsToCheck <= 0) {
+    return 0;
+  }
+
+  var topRows = readSheetValues(sheet, 1, 1, rowsToCheck, scanNumCols);
+  for (var i = 0; i < topRows.length; i++) {
+    if (countNonEmptyCells([topRows[i]]) >= 2) {
+      return i + 1;
+    }
+  }
+
+  return 0;
+}
+
+/**
+ * Builds field metadata for the table around the selected range.
+ */
+function buildAgentFillTableInfo(sheet, headerRow, selectionStartCol, selectionEndCol, scanNumCols, selectionStartRow, selectionEndRow) {
+  var startCol = selectionStartCol;
+  var endCol = selectionEndCol;
+  var headers = [];
+
+  if (headerRow) {
+    var headerValues = readSheetValues(sheet, headerRow, 1, 1, scanNumCols)[0] || [];
+    var bounds = findAgentFillHeaderBounds(headerValues, selectionStartCol, selectionEndCol);
+    startCol = bounds.startCol;
+    endCol = bounds.endCol;
+    headers = headerValues.slice(startCol - 1, endCol);
+  } else {
+    startCol = 1;
+    endCol = Math.max(selectionEndCol, Math.min(scanNumCols, selectionEndCol + 3));
+    for (var col = startCol; col <= endCol; col++) {
+      headers.push(formatColumnLabel(col));
+    }
+  }
+
+  var fields = [];
+  var fieldByColumn = {};
+  var usedKeys = {};
+  for (var currentCol = startCol; currentCol <= endCol; currentCol++) {
+    var rawHeader = headers[currentCol - startCol];
+    var hasHeader = !isBlankValue(rawHeader) && String(rawHeader).trim() !== '';
+    var title = String(rawHeader || '').trim() || formatColumnLabel(currentCol);
+    var fieldId = normalizeAgentColumnKey(title, usedKeys);
+    var field = {
+      fieldId: fieldId,
+      title: title,
+      column: currentCol,
+      columnLetter: formatColumnLabel(currentCol),
+      hasHeader: hasHeader
+    };
+    fields.push(field);
+    fieldByColumn[currentCol] = field;
+  }
+
+  var lastRow = Math.max(sheet.getLastRow ? sheet.getLastRow() : selectionEndRow, selectionEndRow);
+  var dataStartRow = headerRow
+    ? Math.max(headerRow + 1, selectionStartRow - 5)
+    : Math.max(1, selectionStartRow - 5);
+  var dataEndRow = Math.min(lastRow, selectionEndRow + 5);
+  return {
+    startCol: startCol,
+    endCol: endCol,
+    headerRow: headerRow || null,
+    dataStartRow: dataStartRow,
+    dataEndRow: Math.max(dataEndRow, dataStartRow),
+    fields: fields,
+    fieldByColumn: fieldByColumn
+  };
+}
+
+/**
+ * Finds the broad header span that contains the selected columns.
+ */
+function findAgentFillHeaderBounds(headerValues, selectionStartCol, selectionEndCol) {
+  var first = 0;
+  var last = 0;
+  for (var i = 0; i < headerValues.length; i++) {
+    if (!isBlankValue(headerValues[i])) {
+      if (!first) first = i + 1;
+      last = i + 1;
+    }
+  }
+
+  if (!first || !last) {
+    return { startCol: selectionStartCol, endCol: selectionEndCol };
+  }
+
+  return {
+    startCol: Math.min(first, selectionStartCol),
+    endCol: Math.max(last, selectionEndCol)
+  };
+}
+
+/**
+ * Converts table rows into structured row context for Agent input.
+ */
+function buildAgentFillRowContexts(tableValues, dataStartRow, table) {
+  return tableValues.map(function(rowValues, index) {
+    var rowNumber = dataStartRow + index;
+    var cells = table.fields.map(function(field, fieldIndex) {
+      return {
+        fieldId: field.fieldId,
+        title: field.title,
+        column: field.columnLetter,
+        value: formatAgentInputCellValue(rowValues[fieldIndex])
+      };
+    });
+
+    return {
+      rowId: createAgentFillRowId(rowNumber),
+      rowNumber: rowNumber,
+      cells: cells
+    };
+  });
+}
+
+/**
+ * Builds a prompt for one fill job.
+ */
+function buildAgentFillPrompt(job, instructions) {
+  var fieldLines = (job.fields || []).map(function(field) {
+    return '- ' + field.fieldId + ' (' + field.title + ', column ' + field.columnLetter + ')';
+  }).join('\n');
+
+  var targetLines = (job.targets || []).map(function(target) {
+    return '- ' + target.cell + ': rowId ' + target.rowId + ', field ' + target.fieldId + ' (' + target.title + ')';
+  }).join('\n');
+
+  var guidance = instructions
+    ? '\nUser guidance: ' + instructions
+    : '';
+
+  return [
+    'Fill selected blank cells in a Google Sheets table.',
+    'Use input.data as the spreadsheet context. Each row has cells with field ids, titles, columns, and current values.',
+    'Use web research. Do not rely on memory.',
+    'Fill only the requested target cells listed below.',
+    'Keep values short, clean, and spreadsheet-ready.',
+    'Return null when a value cannot be verified from reliable public sources.',
+    'Do not invent values. Do not return notes, citations, sources, markdown, or extra fields.',
+    '',
+    'Target fields:',
+    fieldLines,
+    '',
+    'Target cells:',
+    targetLines,
+    guidance,
+    '',
+    'Return exactly one rows item for each target rowId. Preserve rowId exactly and put cell values under values.<fieldId>.'
+  ].filter(function(part) { return part !== ''; }).join('\n');
+}
+
+/**
+ * Builds a prompt for continuing blank rows directly below an existing table.
+ */
+function buildAgentContinueTablePrompt(job, instructions) {
+  var fieldLines = (job.fields || []).map(function(field) {
+    return '- ' + field.fieldId + ' (' + field.title + ', column ' + field.columnLetter + ')';
+  }).join('\n');
+
+  var targetRows = formatAgentTargetRows(job.targets || []);
+  var guidance = instructions
+    ? '\nUser guidance: ' + instructions
+    : '';
+
+  return [
+    'Continue the existing Google Sheets table into the selected blank rows.',
+    'Use input.data as the table context. It contains real rows already in the sheet, including nearby rows before the blank selection.',
+    'Use web research. Do not rely on memory.',
+    'Fill only the requested target cells listed below.',
+    'Keep the same topic, ordering, formatting, and value style as the existing rows.',
+    'If a selected column is a rank, index, date, year, or other sequence, continue the sequence from the existing rows.',
+    'Do not repeat entities already present in input.data.',
+    'Every new row must be a real, source-verifiable entity that belongs next in the table.',
+    'Keep values short, clean, and spreadsheet-ready.',
+    'Return null when a value cannot be verified from reliable public sources.',
+    'Do not invent values. Do not return notes, citations, sources, markdown, or extra fields.',
+    '',
+    'Target fields:',
+    fieldLines,
+    '',
+    'Target rows and cells:',
+    targetRows,
+    guidance,
+    '',
+    'Return exactly one rows item for each target rowId. Preserve rowId exactly and put cell values under values.<fieldId>.'
+  ].filter(function(part) { return part !== ''; }).join('\n');
+}
+
+function formatAgentTargetRows(targets) {
+  var rows = {};
+  var order = [];
+  targets.forEach(function(target) {
+    if (!rows[target.rowId]) {
+      rows[target.rowId] = {
+        row: target.row,
+        cells: []
+      };
+      order.push(target.rowId);
+    }
+    rows[target.rowId].cells.push(target.cell + ' = ' + target.fieldId + ' (' + target.title + ')');
+  });
+
+  order.sort(function(a, b) {
+    return (rows[a].row || 0) - (rows[b].row || 0);
+  });
+
+  return order.map(function(rowId) {
+    return '- ' + rowId + ' (sheet row ' + rows[rowId].row + '): ' + rows[rowId].cells.join(', ');
+  }).join('\n');
+}
+
+/**
+ * Builds the strict output schema for one fill job.
+ */
+function buildAgentFillOutputSchema(job) {
+  var rowIds = (job.targetRowIds && job.targetRowIds.length)
+    ? job.targetRowIds
+    : uniqueStrings((job.targets || []).map(function(target) { return target.rowId; }));
+  var properties = {};
+  var requiredFields = [];
+  (job.fields || []).forEach(function(field) {
+    requiredFields.push(field.fieldId);
+    properties[field.fieldId] = {
+      anyOf: [
+        { type: 'string' },
+        { type: 'number' },
+        { type: 'boolean' },
+        { type: 'array', items: { type: 'string' } },
+        { type: 'null' }
+      ],
+      description: 'Value for ' + field.title + '. Return null if unavailable.'
+    };
+  });
+  var valuesSchema = {
+    type: 'object',
+    additionalProperties: false,
+    properties: properties
+  };
+  if (job && job.mode === 'continue-table' && requiredFields.length > 0) {
+    valuesSchema.required = requiredFields;
+  }
+
+  return {
+    type: 'object',
+    required: ['rows'],
+    additionalProperties: false,
+    properties: {
+      rows: {
+        type: 'array',
+        minItems: rowIds.length,
+        maxItems: rowIds.length,
+        items: {
+          type: 'object',
+          required: ['rowId', 'values'],
+          additionalProperties: false,
+          properties: {
+            rowId: {
+              type: 'string',
+              enum: rowIds
+            },
+            values: valuesSchema
+          }
+        }
+      }
+    }
+  };
+}
+
+/**
+ * Extracts and validates fill values from a completed run.
+ */
+function extractAgentFillValues(run, fillConfig) {
+  var structured = run && run.output ? run.output.structured : null;
+  if (!structured) {
+    return { success: false, message: 'Agent run completed, but no structured output was returned.' };
+  }
+
+  var records = Array.isArray(structured)
+    ? structured
+    : (Array.isArray(structured.rows) ? structured.rows : []);
+  if (records.length === 0) {
+    return { success: false, message: 'Agent did not return any filled values.' };
+  }
+
+  var targets = Array.isArray(fillConfig.targets) ? fillConfig.targets : [];
+  var allowed = {};
+  targets.forEach(function(target) {
+    allowed[target.rowId + '::' + target.fieldId] = target;
+  });
+
+  var valuesByTarget = {};
+  records.forEach(function(record) {
+    if (!record || typeof record !== 'object') return;
+    var rowId = String(record.rowId || record.row_id || '');
+    var values = record.values && typeof record.values === 'object' ? record.values : record;
+    Object.keys(values).forEach(function(fieldId) {
+      var key = rowId + '::' + fieldId;
+      if (allowed[key]) {
+        valuesByTarget[key] = values[fieldId];
+      }
+    });
+  });
+
+  return {
+    success: true,
+    targets: targets.map(function(target) {
+      var key = target.rowId + '::' + target.fieldId;
+      return {
+        row: target.row,
+        column: target.column,
+        cell: target.cell,
+        rowId: target.rowId,
+        fieldId: target.fieldId,
+        value: Object.prototype.hasOwnProperty.call(valuesByTarget, key) ? valuesByTarget[key] : ''
+      };
+    })
+  };
+}
+
+/**
+ * Keeps only the fill config fields needed for writing a result.
+ */
+function sanitizeAgentFillConfig(job) {
+  return {
+    jobId: String(job.jobId || ''),
+    sheetId: job.sheetId === null || job.sheetId === undefined ? null : Number(job.sheetId),
+    sheetName: String(job.sheetName || ''),
+    overwrite: job.overwrite === true,
+    targets: (job.targets || []).map(function(target) {
+      return {
+        cell: target.cell,
+        row: target.row,
+        column: target.column,
+        rowId: target.rowId,
+        fieldId: target.fieldId,
+        title: target.title
+      };
+    }),
+    fields: (job.fields || []).map(function(field) {
+      return {
+        fieldId: field.fieldId,
+        title: field.title,
+        column: field.column,
+        columnLetter: field.columnLetter
+      };
+    })
+  };
+}
+
+function readAgentFillInstructions(instructions) {
+  return (typeof instructions === 'string') ? instructions.trim() : '';
+}
+
+function isAgentFillCellBlank(value, formula) {
+  return isBlankValue(value) && isBlankValue(formula);
+}
+
+function isBlankValue(value) {
+  return value === '' || value === null || value === undefined;
+}
+
+function formatAgentInputCellValue(value) {
+  if (value === null || value === undefined) return '';
+  if (isDateLikeValue(value)) {
+    try {
+      return value.toISOString();
+    } catch (e) {
+      return String(value);
+    }
+  }
+  if (Array.isArray(value)) {
+    return value.map(formatAgentInputCellValue).join(', ');
+  }
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch (e) {
+      return String(value);
+    }
+  }
+  return value;
+}
+
+function isDateLikeValue(value) {
+  return Object.prototype.toString.call(value) === '[object Date]' ||
+    (value && typeof value === 'object' && typeof value.toISOString === 'function' && typeof value.getTime === 'function');
+}
+
+function rowHasAgentFillContext(rowContext) {
+  return !!(rowContext && Array.isArray(rowContext.cells) && rowContext.cells.some(function(cell) {
+    return !isBlankValue(cell.value);
+  }));
+}
+
+function pickAgentFillExampleRows(rowContexts, selectedRows, limit) {
+  var selected = {};
+  selectedRows.forEach(function(row) { selected[row] = true; });
+  return rowContexts
+    .filter(function(rowContext) {
+      return selected[rowContext.rowNumber] !== true && rowHasAgentFillContext(rowContext);
+    })
+    .slice(0, limit)
+    .map(function(rowContext) {
+      return {
+        rowId: rowContext.rowId,
+        rowNumber: rowContext.rowNumber,
+        example: true,
+        cells: rowContext.cells
+      };
+    });
+}
+
+function pickAgentContinueTableExampleRows(rowContexts, selectedRows, limit) {
+  var selected = {};
+  selectedRows.forEach(function(row) { selected[row] = true; });
+  var firstSelectedRow = selectedRows[0] || 0;
+  var examples = rowContexts
+    .filter(function(rowContext) {
+      return rowContext.rowNumber < firstSelectedRow &&
+        selected[rowContext.rowNumber] !== true &&
+        rowHasAgentFillContext(rowContext);
+    })
+    .slice(-limit)
+    .map(function(rowContext) {
+      return {
+        rowId: rowContext.rowId,
+        rowNumber: rowContext.rowNumber,
+        example: true,
+        cells: rowContext.cells
+      };
+    });
+
+  return examples;
+}
+
+function uniqueAgentFillFields(targets, table) {
+  var seen = {};
+  var fields = [];
+  targets.forEach(function(target) {
+    if (seen[target.fieldId]) return;
+    seen[target.fieldId] = true;
+    var field = table.fieldByColumn[target.column] || createAgentFillFallbackField(target.column);
+    fields.push(field);
+  });
+  return fields;
+}
+
+function createAgentFillFallbackField(col) {
+  return {
+    fieldId: normalizeAgentColumnKey(formatColumnLabel(col), {}),
+    title: formatColumnLabel(col),
+    column: col,
+    columnLetter: formatColumnLabel(col),
+    hasHeader: false
+  };
+}
+
+function countUniqueAgentFillRows(targets) {
+  return uniqueStrings((targets || []).map(function(target) { return target.rowId; })).length;
+}
+
+function createAgentFillRowId(row) {
+  return 'row_' + row;
+}
+
+function readSheetValues(sheet, row, col, numRows, numCols) {
+  if (numRows <= 0 || numCols <= 0) {
+    return [];
+  }
+  return sheet.getRange(row, col, numRows, numCols).getValues();
+}
+
+function createBlankMatrix(numRows, numCols) {
+  var rows = [];
+  for (var r = 0; r < numRows; r++) {
+    var row = [];
+    for (var c = 0; c < numCols; c++) {
+      row.push('');
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+function uniqueNumbers(values) {
+  var seen = {};
+  var result = [];
+  values.forEach(function(value) {
+    var numberValue = Number(value);
+    if (!numberValue || seen[numberValue]) return;
+    seen[numberValue] = true;
+    result.push(numberValue);
+  });
+  return result.sort(function(a, b) { return a - b; });
+}
+
+function uniqueStrings(values) {
+  var seen = {};
+  var result = [];
+  values.forEach(function(value) {
+    var stringValue = String(value || '');
+    if (!stringValue || seen[stringValue]) return;
+    seen[stringValue] = true;
+    result.push(stringValue);
+  });
+  return result;
+}
+
+function chunkArray(values, chunkSize) {
+  var chunks = [];
+  for (var i = 0; i < values.length; i += chunkSize) {
+    chunks.push(values.slice(i, i + chunkSize));
+  }
+  return chunks;
 }
 
 /**
@@ -1452,7 +2476,12 @@ function writeAgentRunToSheet(runId, tableConfig, writeOptions) {
   }
 
   try {
-    var sheet = SpreadsheetApp.getActiveSheet();
+    var sheetResult = getAgentWriteSheet(tableConfig || {});
+    if (!sheetResult.success) {
+      return sheetResult;
+    }
+
+    var sheet = sheetResult.sheet;
     var startRange = null;
     var requestedStartCell = normalizeAgentStartCell(
       tableConfig && tableConfig.startCell ? tableConfig.startCell : writeOptions.startCell
@@ -1655,7 +2684,7 @@ function buildAgentSheetValues(run, tableConfig, includeHeaders, includeSources)
   if (dataValues.length === 0) {
     return {
       success: false,
-      message: 'Agent returned column headers but no usable data rows. Try running again, or open Choose columns and provide the exact columns you want.'
+      message: 'Agent returned column headers but no usable data rows. Try running again, or open More options and add the columns you want.'
     };
   }
 
@@ -1924,9 +2953,9 @@ function isValidAgentStartCell(startCell) {
  * Reads the currently selected cell when the Agent run starts.
  * @return {string} Active cell address, or A1 if unavailable
  */
-function getCurrentAgentStartCell() {
+function getCurrentAgentStartCell(sheet) {
   try {
-    var sheet = SpreadsheetApp.getActiveSheet();
+    sheet = sheet || SpreadsheetApp.getActiveSheet();
     var activeRange = sheet && sheet.getActiveRange ? sheet.getActiveRange() : null;
     if (activeRange && activeRange.getRow && activeRange.getColumn) {
       return formatCellA1(activeRange.getRow(), activeRange.getColumn());
@@ -1936,6 +2965,61 @@ function getCurrentAgentStartCell() {
   }
 
   return 'A1';
+}
+
+/**
+ * Captures the sheet identity for long-running Agent writes.
+ * @param {Sheet} sheet Target sheet
+ * @return {Object} Sheet identity
+ */
+function getAgentSheetContext(sheet) {
+  return {
+    sheetId: sheet && sheet.getSheetId ? sheet.getSheetId() : null,
+    sheetName: sheet && sheet.getName ? sheet.getName() : ''
+  };
+}
+
+/**
+ * Finds the sheet that was active when an Agent run started.
+ * Falls back to the active sheet only for older configs that did not store sheet identity.
+ * @param {Object} config Table/fill write config
+ * @return {Object} Result with sheet or user-facing error
+ */
+function getAgentWriteSheet(config) {
+  config = config || {};
+  var sheetId = config.sheetId === null || config.sheetId === undefined ? null : Number(config.sheetId);
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet ? SpreadsheetApp.getActiveSpreadsheet() : null;
+
+  if (sheetId !== null && !isNaN(sheetId) && spreadsheet && spreadsheet.getSheets) {
+    var sheets = spreadsheet.getSheets();
+    for (var i = 0; i < sheets.length; i++) {
+      if (sheets[i].getSheetId && Number(sheets[i].getSheetId()) === sheetId) {
+        return { success: true, sheet: sheets[i] };
+      }
+    }
+
+    return {
+      success: false,
+      message: 'The sheet used for this Agent run could not be found. Run it again from the sheet you want to update.'
+    };
+  }
+
+  if (config.sheetName && spreadsheet && spreadsheet.getSheetByName) {
+    var namedSheet = spreadsheet.getSheetByName(config.sheetName);
+    if (namedSheet) {
+      return { success: true, sheet: namedSheet };
+    }
+  }
+
+  var activeSheet = SpreadsheetApp.getActiveSheet ? SpreadsheetApp.getActiveSheet() : null;
+  if (activeSheet) {
+    return { success: true, sheet: activeSheet };
+  }
+
+  return {
+    success: false,
+    message: 'Could not find the sheet to write to.'
+  };
 }
 
 /**
@@ -2003,6 +3087,15 @@ function styleAgentTable(sheet, startRow, startCol, numRows, numCols, includeHea
  * @return {string} A1 coordinate
  */
 function formatCellA1(row, col) {
+  return formatColumnLabel(col) + row;
+}
+
+/**
+ * Formats a one-based column number as A1-style letters.
+ * @param {number} col Column number
+ * @return {string} Column letters
+ */
+function formatColumnLabel(col) {
   var letters = '';
   var current = col;
   while (current > 0) {
@@ -2010,7 +3103,7 @@ function formatCellA1(row, col) {
     letters = String.fromCharCode(65 + remainder) + letters;
     current = Math.floor((current - 1) / 26);
   }
-  return letters + row;
+  return letters;
 }
 
 /**

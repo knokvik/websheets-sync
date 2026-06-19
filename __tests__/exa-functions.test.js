@@ -1403,6 +1403,610 @@ describe('Agent Table', () => {
 
     SpreadsheetApp.getActiveSheet = originalGetActiveSheet;
   });
+
+  test('writeAgentRunToSheet should write to the saved sheet even if another sheet is active', () => {
+    UrlFetchApp.fetch.mockReturnValue({
+      getResponseCode: () => 200,
+      getContentText: () => JSON.stringify({
+        id: 'agent_run_test',
+        object: 'agent_run',
+        status: 'completed',
+        output: {
+          structured: {
+            columns: ['Company Name'],
+            rows: [{ cells: ['Exa'] }]
+          },
+          grounding: []
+        }
+      })
+    });
+
+    const target = createMockSheet([[''], ['']], 'A1', [], { name: 'Target', sheetId: 222 });
+    const active = createMockSheet([['']], 'A1', [], { name: 'Other', sheetId: 333 });
+    const originalGetActiveSheet = SpreadsheetApp.getActiveSheet;
+    const originalGetActiveSpreadsheet = SpreadsheetApp.getActiveSpreadsheet;
+    SpreadsheetApp.getActiveSheet = jest.fn(() => active.sheet);
+    SpreadsheetApp.getActiveSpreadsheet = jest.fn(() => ({
+      getSheets: () => [active.sheet, target.sheet],
+      getSheetByName: (name) => ({ Target: target.sheet, Other: active.sheet }[name] || null)
+    }));
+
+    const result = writeAgentRunToSheet(
+      'agent_run_test',
+      { rootKey: 'rows', columns: [], autoColumns: true, startCell: 'B2', sheetId: 222, sheetName: 'Target' },
+      { includeHeaders: true, includeSources: false }
+    );
+
+    expect(result.success).toBe(true);
+    expect(target.writes).toEqual([
+      { row: 2, col: 2, value: 'Company Name' },
+      { row: 3, col: 2, value: 'Exa' }
+    ]);
+    expect(active.writes).toEqual([]);
+
+    SpreadsheetApp.getActiveSheet = originalGetActiveSheet;
+    if (originalGetActiveSpreadsheet) {
+      SpreadsheetApp.getActiveSpreadsheet = originalGetActiveSpreadsheet;
+    } else {
+      delete SpreadsheetApp.getActiveSpreadsheet;
+    }
+  });
+});
+
+function testColumnToNumber(label) {
+  return label.split('').reduce((total, ch) => total * 26 + ch.charCodeAt(0) - 64, 0);
+}
+
+function testColumnToLabel(col) {
+  let letters = '';
+  let current = col;
+  while (current > 0) {
+    const remainder = (current - 1) % 26;
+    letters = String.fromCharCode(65 + remainder) + letters;
+    current = Math.floor((current - 1) / 26);
+  }
+  return letters;
+}
+
+function parseTestA1Range(a1) {
+  const parts = a1.split(':');
+  const parseCell = (cell) => {
+    const match = cell.match(/^([A-Z]+)(\d+)$/i);
+    return {
+      col: testColumnToNumber(match[1].toUpperCase()),
+      row: Number(match[2])
+    };
+  };
+  const start = parseCell(parts[0]);
+  const end = parts[1] ? parseCell(parts[1]) : start;
+  return {
+    row: start.row,
+    col: start.col,
+    numRows: end.row - start.row + 1,
+    numCols: end.col - start.col + 1
+  };
+}
+
+function createMockSheet(data, selectionA1, formulas = [], options = {}) {
+  const selection = parseTestA1Range(selectionA1);
+  const writes = [];
+  const getCellValue = (row, col) => (data[row - 1] && data[row - 1][col - 1] !== undefined) ? data[row - 1][col - 1] : '';
+  const getCellFormula = (row, col) => (formulas[row - 1] && formulas[row - 1][col - 1] !== undefined) ? formulas[row - 1][col - 1] : '';
+  const ensureCell = (row, col) => {
+    while (data.length < row) data.push([]);
+    while (data[row - 1].length < col) data[row - 1].push('');
+  };
+
+  const makeRange = (row, col, numRows = 1, numCols = 1) => ({
+    getRow: () => row,
+    getColumn: () => col,
+    getNumRows: () => numRows,
+    getNumColumns: () => numCols,
+    getA1Notation: () => `${testColumnToLabel(col)}${row}:${testColumnToLabel(col + numCols - 1)}${row + numRows - 1}`,
+    getValues: () => Array.from({ length: numRows }, (_, rowOffset) =>
+      Array.from({ length: numCols }, (_, colOffset) => getCellValue(row + rowOffset, col + colOffset))
+    ),
+    getFormulas: () => Array.from({ length: numRows }, (_, rowOffset) =>
+      Array.from({ length: numCols }, (_, colOffset) => getCellFormula(row + rowOffset, col + colOffset))
+    ),
+    getValue: () => getCellValue(row, col),
+    getFormula: () => getCellFormula(row, col),
+    setValue: jest.fn((value) => {
+      ensureCell(row, col);
+      data[row - 1][col - 1] = value;
+      writes.push({ row, col, value });
+    }),
+    setValues: jest.fn((values) => {
+      values.forEach((valueRow, rowOffset) => {
+        valueRow.forEach((value, colOffset) => {
+          ensureCell(row + rowOffset, col + colOffset);
+          data[row + rowOffset - 1][col + colOffset - 1] = value;
+          writes.push({ row: row + rowOffset, col: col + colOffset, value });
+        });
+      });
+    }),
+    setFontWeight: jest.fn(),
+    setBackground: jest.fn()
+  });
+
+  const sheet = {
+    getName: () => options.name || 'Sheet1',
+    getSheetId: () => options.sheetId || 1001,
+    getLastRow: () => data.length,
+    getLastColumn: () => Math.max(...data.map(row => row.length)),
+    getFrozenRows: () => 0,
+    getActiveRange: () => makeRange(selection.row, selection.col, selection.numRows, selection.numCols),
+    getRange: jest.fn((arg1, arg2, arg3, arg4) => {
+      if (typeof arg1 === 'string') {
+        const parsed = parseTestA1Range(arg1);
+        return makeRange(parsed.row, parsed.col, parsed.numRows, parsed.numCols);
+      }
+      return makeRange(arg1, arg2, arg3 || 1, arg4 || 1);
+    }),
+    getMaxRows: () => 1000,
+    getMaxColumns: () => 26,
+    autoResizeColumns: jest.fn()
+  };
+
+  return { sheet, writes, data };
+}
+
+describe('Agent Fill Cells', () => {
+  beforeEach(() => {
+    resetMocks();
+    saveApiKey('exa_test_api_key');
+  });
+
+  test('prepareAgentFillJobs should use headers and nearby rows as context for blank selected cells', () => {
+    const { sheet } = createMockSheet([
+      ['Company Name', 'Website URL', 'HQ', 'CEO', 'One Liner', 'LinkedIn URL'],
+      ['Apple', 'https://apple.com', '', '', '', ''],
+      ['Google', 'https://google.com', 'Mountain View, CA', 'Sundar Pichai', 'Search and cloud company', 'https://www.linkedin.com/company/google']
+    ], 'D2:F2');
+    const originalGetActiveSheet = SpreadsheetApp.getActiveSheet;
+    SpreadsheetApp.getActiveSheet = jest.fn(() => sheet);
+
+    const result = prepareAgentFillJobs({ overwrite: false, instructions: '' });
+
+    expect(result.success).toBe(true);
+    expect(result.totalCells).toBe(3);
+    expect(result.jobs).toHaveLength(1);
+    expect(result.jobs[0].sheetId).toBe(1001);
+    expect(result.jobs[0].sheetName).toBe('Sheet1');
+    expect(result.jobs[0].targets.map(target => target.cell)).toEqual(['D2', 'E2', 'F2']);
+    expect(result.jobs[0].targets.map(target => target.fieldId)).toEqual(['ceo', 'one_liner', 'linkedin_url']);
+    expect(result.jobs[0].inputRows.find(row => row.rowId === 'row_2').cells[0].value).toBe('Apple');
+    expect(result.jobs[0].inputRows.some(row => row.example === true && row.rowId === 'row_3')).toBe(true);
+
+    SpreadsheetApp.getActiveSheet = originalGetActiveSheet;
+  });
+
+  test('prepareAgentFillJobs should skip non-empty cells and empty rows by default', () => {
+    const { sheet } = createMockSheet([
+      ['Company Name', 'Website URL', 'HQ', 'CEO'],
+      ['Apple', 'https://apple.com', '', 'Tim Cook'],
+      ['', '', '', '']
+    ], 'C2:D3');
+    const originalGetActiveSheet = SpreadsheetApp.getActiveSheet;
+    SpreadsheetApp.getActiveSheet = jest.fn(() => sheet);
+
+    const result = prepareAgentFillJobs({ overwrite: false });
+
+    expect(result.success).toBe(true);
+    expect(result.totalCells).toBe(1);
+    expect(result.jobs[0].targets.map(target => target.cell)).toEqual(['C2']);
+
+    SpreadsheetApp.getActiveSheet = originalGetActiveSheet;
+  });
+
+  test('prepareAgentFillJobs should explain when blank rows do not have enough context', () => {
+    const { sheet } = createMockSheet([
+      ['Company Name', 'Website URL', 'HQ', 'CEO'],
+      ['', '', '', '']
+    ], 'C2:D2');
+    const originalGetActiveSheet = SpreadsheetApp.getActiveSheet;
+    SpreadsheetApp.getActiveSheet = jest.fn(() => sheet);
+
+    const result = prepareAgentFillJobs({ overwrite: false });
+
+    expect(result.success).toBe(false);
+    expect(result.message).toBe('Select blanks in rows that already have some data.');
+
+    SpreadsheetApp.getActiveSheet = originalGetActiveSheet;
+  });
+
+  test('prepareAgentFillJobs should continue blank rows under an existing ranked table', () => {
+    const { sheet } = createMockSheet([
+      ['Rank', 'Company', 'Industry', 'Revenue in INR', 'Source'],
+      [51, 'Adani Power', 'Power', '58,906', 'Fortune India 500 2025'],
+      [52, 'IndusInd Bank', 'Banks', '56,358', 'Fortune India 500 2025'],
+      [53, 'Sun Pharmaceuticals Industries', 'Pharma', '54,579', 'Fortune India 500 2025'],
+      [54, 'Tech Mahindra', 'IT Services', '53,852', 'Fortune India 500 2025'],
+      [55, 'Bajaj Auto', 'Auto - Two Wheeler', '52,441', 'Fortune India 500 2025'],
+      ['', '', '', '', ''],
+      ['', '', '', '', '']
+    ], 'A7:E8');
+    const originalGetActiveSheet = SpreadsheetApp.getActiveSheet;
+    SpreadsheetApp.getActiveSheet = jest.fn(() => sheet);
+
+    const result = prepareAgentFillJobs({ overwrite: false });
+
+    expect(result.success).toBe(true);
+    expect(result.totalCells).toBe(10);
+    expect(result.jobs).toHaveLength(1);
+    expect(result.jobs[0].mode).toBe('continue-table');
+    expect(result.jobs[0].targetRowIds).toEqual(['row_7', 'row_8']);
+    expect(result.jobs[0].targets.map(target => target.cell)).toEqual([
+      'A7', 'B7', 'C7', 'D7', 'E7',
+      'A8', 'B8', 'C8', 'D8', 'E8'
+    ]);
+    expect(result.jobs[0].fields.map(field => field.title)).toEqual([
+      'Rank', 'Company', 'Industry', 'Revenue in INR', 'Source'
+    ]);
+    expect(result.jobs[0].inputRows).toHaveLength(5);
+    expect(result.jobs[0].inputRows[result.jobs[0].inputRows.length - 1].cells[1].value).toBe('Bajaj Auto');
+
+    SpreadsheetApp.getActiveSheet = originalGetActiveSheet;
+  });
+
+  test('prepareAgentFillJobs should keep one run for multi-row table continuation', () => {
+    const rows = [
+      ['Rank', 'Company', 'Industry', 'Revenue in INR', 'Source']
+    ];
+    for (let rank = 1; rank <= 10; rank++) {
+      rows.push([rank, `Company ${rank}`, `Industry ${rank}`, `${rank * 1000}`, 'Source']);
+    }
+    for (let i = 0; i < 20; i++) {
+      rows.push(['', '', '', '', '']);
+    }
+
+    const { sheet } = createMockSheet(rows, 'A12:E31');
+    const originalGetActiveSheet = SpreadsheetApp.getActiveSheet;
+    SpreadsheetApp.getActiveSheet = jest.fn(() => sheet);
+
+    const result = prepareAgentFillJobs({ overwrite: false });
+
+    expect(result.success).toBe(true);
+    expect(result.totalCells).toBe(100);
+    expect(result.jobs).toHaveLength(1);
+    expect(result.jobs[0].mode).toBe('continue-table');
+    expect(result.jobs[0].targetRowIds).toHaveLength(20);
+
+    SpreadsheetApp.getActiveSheet = originalGetActiveSheet;
+  });
+
+  test('prepareAgentFillJobs should ignore selected blank columns outside the table header', () => {
+    const { sheet } = createMockSheet([
+      ['Rank', 'Company'],
+      [1, 'Company 1'],
+      [2, 'Company 2'],
+      ['', '', ''],
+      ['', '', '']
+    ], 'A4:C5');
+    const originalGetActiveSheet = SpreadsheetApp.getActiveSheet;
+    SpreadsheetApp.getActiveSheet = jest.fn(() => sheet);
+
+    const result = prepareAgentFillJobs({ overwrite: false });
+
+    expect(result.success).toBe(true);
+    expect(result.totalCells).toBe(4);
+    expect(result.skippedCells).toBe(2);
+    expect(result.jobs).toHaveLength(1);
+    expect(result.jobs[0].mode).toBe('continue-table');
+    expect(result.jobs[0].targets.map(target => target.cell)).toEqual(['A4', 'B4', 'A5', 'B5']);
+
+    SpreadsheetApp.getActiveSheet = originalGetActiveSheet;
+  });
+
+  test('prepareAgentFillJobs should reject blank rows that are too far from table examples', () => {
+    const rows = [
+      ['Rank', 'Company'],
+      [1, 'Company 1'],
+      [2, 'Company 2']
+    ];
+    while (rows.length < 21) {
+      rows.push(['', '']);
+    }
+
+    const { sheet } = createMockSheet(rows, 'A20:B21');
+    const originalGetActiveSheet = SpreadsheetApp.getActiveSheet;
+    SpreadsheetApp.getActiveSheet = jest.fn(() => sheet);
+
+    const result = prepareAgentFillJobs({ overwrite: false });
+
+    expect(result.success).toBe(false);
+    expect(result.message).toBe('Select blanks in rows that already have some data.');
+
+    SpreadsheetApp.getActiveSheet = originalGetActiveSheet;
+  });
+
+  test('prepareAgentFillJobs should return selected range for sidebar confirmation', () => {
+    const { sheet } = createMockSheet([
+      ['Company Name', 'Website URL', 'HQ'],
+      ['Apple', 'https://apple.com', '']
+    ], 'C2');
+    const originalGetActiveSheet = SpreadsheetApp.getActiveSheet;
+    SpreadsheetApp.getActiveSheet = jest.fn(() => sheet);
+
+    const result = prepareAgentFillJobs({ overwrite: false });
+
+    expect(result.success).toBe(true);
+    expect(result.selectedRange).toBe('C2:C2');
+    expect(result.totalCells).toBe(1);
+
+    SpreadsheetApp.getActiveSheet = originalGetActiveSheet;
+  });
+
+  test('prepareAgentFillJobs should not mistake nearby data rows for headers in long tables', () => {
+    const rows = [
+      ['Company Name', 'Website URL', 'HQ', 'CEO']
+    ];
+    for (let i = 2; i < 60; i++) {
+      rows.push([`Company ${i}`, `https://company${i}.com`, `City ${i}`, `CEO ${i}`]);
+    }
+    rows.push(['Apple', 'https://apple.com', '', '']);
+
+    const { sheet } = createMockSheet(rows, 'D60');
+    const originalGetActiveSheet = SpreadsheetApp.getActiveSheet;
+    SpreadsheetApp.getActiveSheet = jest.fn(() => sheet);
+
+    const result = prepareAgentFillJobs({ overwrite: false });
+
+    expect(result.success).toBe(true);
+    expect(result.jobs[0].targets[0].fieldId).toBe('ceo');
+    expect(result.jobs[0].targets[0].title).toBe('CEO');
+
+    SpreadsheetApp.getActiveSheet = originalGetActiveSheet;
+  });
+
+  test('startAgentFillRun should create a strict Agent run with row context input', () => {
+    const job = {
+      jobId: 'fill_1',
+      overwrite: false,
+      fields: [{ fieldId: 'ceo', title: 'CEO', column: 4, columnLetter: 'D' }],
+      targets: [{ cell: 'D2', row: 2, column: 4, rowId: 'row_2', fieldId: 'ceo', title: 'CEO', columnLetter: 'D' }],
+      inputRows: [{ rowId: 'row_2', rowNumber: 2, cells: [{ fieldId: 'company_name', title: 'Company Name', column: 'A', value: 'Apple' }] }],
+      targetRowIds: ['row_2']
+    };
+    UrlFetchApp.fetch.mockReturnValue({
+      getResponseCode: () => 200,
+      getContentText: () => JSON.stringify({
+        id: 'agent_run_fill',
+        status: 'running',
+        output: { structured: null },
+        usage: { searches: 0 },
+        costDollars: { total: 0 }
+      })
+    });
+
+    const result = startAgentFillRun(job, { effort: 'auto', instructions: 'Use official sources only.' });
+
+    expect(result.success).toBe(true);
+    expect(result.fillConfig.targets[0].cell).toBe('D2');
+    const payload = JSON.parse(UrlFetchApp.fetch.mock.calls[0][1].payload);
+    expect(payload.query).toContain('Fill selected blank cells');
+    expect(payload.query).toContain('Use official sources only.');
+    expect(payload.input.data[0].rowId).toBe('row_2');
+    expect(payload.input.targets).toBeUndefined();
+    expect(payload.outputSchema.properties.rows.items.properties.rowId.enum).toEqual(['row_2']);
+    expect(payload.outputSchema.properties.rows.items.properties.values.properties.ceo).toBeDefined();
+    expect(payload.outputSchema.properties.rows.items.properties.values.required).toBeUndefined();
+    expect(payload.metadata.targetCells).toBe('1');
+    expect(payload.metadata.overwrite).toBe('false');
+  });
+
+  test('startAgentFillRun should create a continuation Agent run for blank rows below a table', () => {
+    const job = {
+      jobId: 'continue_1',
+      mode: 'continue-table',
+      overwrite: false,
+      fields: [
+        { fieldId: 'rank', title: 'Rank', column: 1, columnLetter: 'A' },
+        { fieldId: 'company', title: 'Company', column: 2, columnLetter: 'B' }
+      ],
+      targets: [
+        { cell: 'A4', row: 4, column: 1, rowId: 'row_4', fieldId: 'rank', title: 'Rank', columnLetter: 'A' },
+        { cell: 'B4', row: 4, column: 2, rowId: 'row_4', fieldId: 'company', title: 'Company', columnLetter: 'B' }
+      ],
+      inputRows: [
+        { rowId: 'row_2', rowNumber: 2, example: true, cells: [{ fieldId: 'rank', title: 'Rank', column: 'A', value: 1 }, { fieldId: 'company', title: 'Company', column: 'B', value: 'Company 1' }] },
+        { rowId: 'row_3', rowNumber: 3, example: true, cells: [{ fieldId: 'rank', title: 'Rank', column: 'A', value: 2 }, { fieldId: 'company', title: 'Company', column: 'B', value: 'Company 2' }] }
+      ],
+      targetRowIds: ['row_4']
+    };
+    UrlFetchApp.fetch.mockReturnValue({
+      getResponseCode: () => 200,
+      getContentText: () => JSON.stringify({
+        id: 'agent_run_continue',
+        status: 'running',
+        output: { structured: null },
+        usage: { searches: 0 },
+        costDollars: { total: 0 }
+      })
+    });
+
+    const result = startAgentFillRun(job, { effort: 'auto', instructions: 'Use the same source as the table.' });
+
+    expect(result.success).toBe(true);
+    expect(result.fillConfig.targets[0].cell).toBe('A4');
+    const payload = JSON.parse(UrlFetchApp.fetch.mock.calls[0][1].payload);
+    expect(payload.query).toContain('Continue the existing Google Sheets table');
+    expect(payload.query).toContain('Do not repeat entities');
+    expect(payload.query).toContain('Use the same source as the table.');
+    expect(payload.input.data[0].example).toBe(true);
+    expect(payload.input.targets).toBeUndefined();
+    expect(payload.metadata.mode).toBe('agent-continue-table');
+    expect(payload.outputSchema.properties.rows.items.properties.rowId.enum).toEqual(['row_4']);
+    expect(payload.outputSchema.properties.rows.items.properties.values.required).toEqual(['rank', 'company']);
+  });
+
+  test('writeAgentFillRunToSheet should write continuation results into selected blank rows', () => {
+    UrlFetchApp.fetch.mockReturnValue({
+      getResponseCode: () => 200,
+      getContentText: () => JSON.stringify({
+        id: 'agent_run_continue',
+        status: 'completed',
+        output: {
+          structured: {
+            rows: [
+              { rowId: 'row_4', values: { rank: 3, company: 'Company 3' } },
+              { rowId: 'row_5', values: { rank: 4, company: 'Company 4' } }
+            ]
+          }
+        },
+        usage: { searches: 2 },
+        costDollars: { total: 0.03 }
+      })
+    });
+    const { sheet, writes } = createMockSheet([
+      ['Rank', 'Company'],
+      [1, 'Company 1'],
+      [2, 'Company 2'],
+      ['', ''],
+      ['', '']
+    ], 'A4:B5');
+    const originalGetActiveSheet = SpreadsheetApp.getActiveSheet;
+    SpreadsheetApp.getActiveSheet = jest.fn(() => sheet);
+
+    const result = writeAgentFillRunToSheet('agent_run_continue', {
+      overwrite: false,
+      targets: [
+        { cell: 'A4', row: 4, column: 1, rowId: 'row_4', fieldId: 'rank', title: 'Rank' },
+        { cell: 'B4', row: 4, column: 2, rowId: 'row_4', fieldId: 'company', title: 'Company' },
+        { cell: 'A5', row: 5, column: 1, rowId: 'row_5', fieldId: 'rank', title: 'Rank' },
+        { cell: 'B5', row: 5, column: 2, rowId: 'row_5', fieldId: 'company', title: 'Company' }
+      ]
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.filled).toBe(4);
+    expect(writes).toEqual([
+      { row: 4, col: 1, value: 3 },
+      { row: 4, col: 2, value: 'Company 3' },
+      { row: 5, col: 1, value: 4 },
+      { row: 5, col: 2, value: 'Company 4' }
+    ]);
+
+    SpreadsheetApp.getActiveSheet = originalGetActiveSheet;
+  });
+
+  test('writeAgentFillRunToSheet should write only allowed returned target cells', () => {
+    UrlFetchApp.fetch.mockReturnValue({
+      getResponseCode: () => 200,
+      getContentText: () => JSON.stringify({
+        id: 'agent_run_fill',
+        status: 'completed',
+        output: {
+          structured: {
+            rows: [
+              { rowId: 'row_2', values: { ceo: 'Tim Cook', hq: 'Cupertino, California' } },
+              { rowId: 'row_999', values: { ceo: 'Ignored' } }
+            ]
+          }
+        },
+        usage: { searches: 3 },
+        costDollars: { total: 0.05 }
+      })
+    });
+    const { sheet, writes } = createMockSheet([
+      ['Company Name', 'Website URL', 'HQ', 'CEO'],
+      ['Apple', 'https://apple.com', '', '']
+    ], 'D2');
+    const originalGetActiveSheet = SpreadsheetApp.getActiveSheet;
+    SpreadsheetApp.getActiveSheet = jest.fn(() => sheet);
+
+    const result = writeAgentFillRunToSheet('agent_run_fill', {
+      overwrite: false,
+      targets: [{ cell: 'D2', row: 2, column: 4, rowId: 'row_2', fieldId: 'ceo', title: 'CEO' }]
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.filled).toBe(1);
+    expect(writes).toEqual([{ row: 2, col: 4, value: 'Tim Cook' }]);
+
+    SpreadsheetApp.getActiveSheet = originalGetActiveSheet;
+  });
+
+  test('writeAgentFillRunToSheet should not overwrite existing cells unless enabled', () => {
+    UrlFetchApp.fetch.mockReturnValue({
+      getResponseCode: () => 200,
+      getContentText: () => JSON.stringify({
+        id: 'agent_run_fill',
+        status: 'completed',
+        output: {
+          structured: {
+            rows: [{ rowId: 'row_2', values: { ceo: 'New CEO' } }]
+          }
+        }
+      })
+    });
+    const { sheet, writes } = createMockSheet([
+      ['Company Name', 'CEO'],
+      ['Apple', 'Existing CEO']
+    ], 'B2');
+    const originalGetActiveSheet = SpreadsheetApp.getActiveSheet;
+    SpreadsheetApp.getActiveSheet = jest.fn(() => sheet);
+
+    const result = writeAgentFillRunToSheet('agent_run_fill', {
+      overwrite: false,
+      targets: [{ cell: 'B2', row: 2, column: 2, rowId: 'row_2', fieldId: 'ceo', title: 'CEO' }]
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.filled).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(writes).toEqual([]);
+
+    SpreadsheetApp.getActiveSheet = originalGetActiveSheet;
+  });
+
+  test('writeAgentFillRunToSheet should write to the saved sheet even if another sheet is active', () => {
+    UrlFetchApp.fetch.mockReturnValue({
+      getResponseCode: () => 200,
+      getContentText: () => JSON.stringify({
+        id: 'agent_run_fill',
+        status: 'completed',
+        output: {
+          structured: {
+            rows: [{ rowId: 'row_2', values: { ceo: 'Tim Cook' } }]
+          }
+        }
+      })
+    });
+    const target = createMockSheet([
+      ['Company Name', 'CEO'],
+      ['Apple', '']
+    ], 'B2', [], { name: 'Target', sheetId: 444 });
+    const active = createMockSheet([
+      ['Company Name', 'CEO'],
+      ['Apple', '']
+    ], 'B2', [], { name: 'Other', sheetId: 555 });
+    const originalGetActiveSheet = SpreadsheetApp.getActiveSheet;
+    const originalGetActiveSpreadsheet = SpreadsheetApp.getActiveSpreadsheet;
+    SpreadsheetApp.getActiveSheet = jest.fn(() => active.sheet);
+    SpreadsheetApp.getActiveSpreadsheet = jest.fn(() => ({
+      getSheets: () => [active.sheet, target.sheet],
+      getSheetByName: (name) => ({ Target: target.sheet, Other: active.sheet }[name] || null)
+    }));
+
+    const result = writeAgentFillRunToSheet('agent_run_fill', {
+      sheetId: 444,
+      sheetName: 'Target',
+      overwrite: false,
+      targets: [{ cell: 'B2', row: 2, column: 2, rowId: 'row_2', fieldId: 'ceo', title: 'CEO' }]
+    });
+
+    expect(result.success).toBe(true);
+    expect(target.writes).toEqual([{ row: 2, col: 2, value: 'Tim Cook' }]);
+    expect(active.writes).toEqual([]);
+
+    SpreadsheetApp.getActiveSheet = originalGetActiveSheet;
+    if (originalGetActiveSpreadsheet) {
+      SpreadsheetApp.getActiveSpreadsheet = originalGetActiveSpreadsheet;
+    } else {
+      delete SpreadsheetApp.getActiveSpreadsheet;
+    }
+  });
 });
 
 describe('Rate Limiting', () => {

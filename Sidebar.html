@@ -194,12 +194,57 @@
 
       .agent-actions {
         display: flex;
+        flex-direction: column;
         gap: 10px;
         margin-top: 5px;
       }
 
       .agent-actions button {
-        flex: 1;
+        width: 100%;
+      }
+
+      .agent-fill-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        margin-top: 5px;
+      }
+
+      .agent-fill-actions button {
+        width: 100%;
+      }
+
+      .mode-switch {
+        background-color: #F3F4F6;
+        border: 1px solid #E5E7EB;
+        border-radius: 8px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 4px;
+        margin-bottom: 16px;
+        padding: 4px;
+      }
+
+      .mode-button {
+        background-color: transparent;
+        border-radius: 6px;
+        color: #4B5563;
+        margin-top: 0;
+        padding: 8px 10px;
+      }
+
+      .mode-button.active {
+        background-color: #FFFFFF;
+        color: #111827;
+        box-shadow: 0 1px 2px rgba(17, 24, 39, 0.08);
+      }
+
+      .mode-button:hover {
+        background-color: #FFFFFF;
+      }
+
+      .agent-panel[hidden] {
+        display: none;
       }
 
       .advanced-options {
@@ -214,8 +259,29 @@
       }
 
       .advanced-options select,
-      .advanced-options input {
+      .advanced-options input,
+      .advanced-options textarea {
         margin-bottom: 10px;
+      }
+
+      .compact-textarea {
+        min-height: 88px;
+      }
+
+      .checkbox-row {
+        align-items: center;
+        display: flex;
+        gap: 8px;
+        margin: 2px 0 12px 0;
+      }
+
+      .checkbox-row input {
+        margin: 0;
+      }
+
+      .checkbox-row label {
+        margin: 0;
+        font-weight: 400;
       }
 
       .secondary-button {
@@ -597,8 +663,9 @@
 
           <div class="doc-section">
             <h4>Exa Agent</h4>
-            <p>Use this when you want Exa to create a full table.</p>
-            <p>Open the Exa Agent tab, write what table you want, then click <strong>Run Agent</strong>. The table starts at your selected cell unless you choose another cell in More options.</p>
+            <p>Use this when you want Exa to generate a full table or fill blanks in an existing table.</p>
+            <p>To generate a table, open Exa Agent, write what table you want, then click <strong>Generate table</strong>. The table starts at your selected cell unless you choose another cell in More options.</p>
+            <p>To fill cells, select the blank cells in your sheet, open <strong>Fill cells</strong>, then click <strong>Fill selected cells</strong>.</p>
             <p>Example: <code>Find top 40 AI companies with website, CEO, founding date, and headquarters.</code></p>
           </div>
 
@@ -622,45 +689,84 @@
 
     <!-- Agent Table Tab -->
     <div id="agentTab" class="tab-content">
-      <h3>Exa Agent</h3>
+      <div class="mode-switch">
+        <button id="agentCreateModeButton" class="mode-button active" onclick="setAgentMode('create')">Generate table</button>
+        <button id="agentFillModeButton" class="mode-button" onclick="setAgentMode('fill')">Fill cells</button>
+      </div>
 
-      <div class="key-section">
-        <label for="agentPrompt">Prompt</label>
-        <textarea id="agentPrompt" placeholder="Find top 40 AI companies and return company name, website URL, CEO, founding date, headquarters, and a short description."></textarea>
+      <div id="agentCreatePanel" class="agent-panel">
+        <div class="key-section">
+          <label for="agentPrompt">Prompt</label>
+          <textarea id="agentPrompt" placeholder="Find top 40 AI companies and return company name, website URL, CEO, founding date, headquarters, and a short description."></textarea>
 
-        <details class="advanced-options">
-          <summary>More options</summary>
+          <details class="advanced-options">
+            <summary>More options</summary>
 
-          <label for="agentEffort">Effort</label>
-          <select id="agentEffort">
-            <option value="auto" selected>Auto</option>
-            <option value="minimal">Minimal</option>
-            <option value="low">Low</option>
-            <option value="medium">Medium</option>
-            <option value="high">High</option>
-            <option value="xhigh">Extra high</option>
-          </select>
-          <div class="small-help">Auto works best for most tables.</div>
+            <label for="agentEffort">Effort</label>
+            <select id="agentEffort">
+              <option value="auto" selected>Auto</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="xhigh">Extra high</option>
+            </select>
+            <div class="small-help">Auto works best for most tables.</div>
 
-          <label for="agentColumns">Columns</label>
-          <input type="text" id="agentColumns" placeholder="company name, website URL, CEO">
-          <div class="small-help">Leave blank and the Agent will choose the columns.</div>
+            <label for="agentColumns">Columns</label>
+            <input type="text" id="agentColumns" placeholder="company name, website URL, CEO">
+            <div class="small-help">Leave blank and the Agent will choose the columns.</div>
 
-          <label for="agentStartCell">Write table at</label>
-          <input type="text" id="agentStartCell" placeholder="A1">
-          <div class="small-help">Leave blank to use the selected cell.</div>
-        </details>
+            <label for="agentStartCell">Write table at</label>
+            <input type="text" id="agentStartCell" placeholder="Selected cell">
+            <div class="small-help">Leave blank to use the selected cell.</div>
+          </details>
 
-        <div class="agent-actions">
-          <button id="agentRunButton" onclick="runAgentTable()">Run Agent</button>
-          <button id="agentCancelButton" class="warning-button" onclick="cancelCurrentAgentRun()" style="display: none;">Cancel</button>
+          <div class="agent-actions">
+            <button id="agentRunButton" onclick="runAgentTable()">Generate table</button>
+            <button id="agentCancelButton" class="warning-button" onclick="cancelCurrentAgentRun()" style="display: none;">Cancel</button>
+          </div>
         </div>
+
+        <div id="agentStatus" class="status-display">
+          Write a prompt, then generate a table.
+        </div>
+        <div id="agentMeta" class="agent-meta"></div>
       </div>
 
-      <div id="agentStatus" class="status-display">
-        Write a prompt, then run the Agent.
+      <div id="agentFillPanel" class="agent-panel" hidden>
+        <div class="key-section">
+          <div class="agent-fill-actions">
+            <button id="agentFillButton" onclick="runAgentFill()">Fill selected cells</button>
+            <button id="agentFillCancelButton" class="warning-button" onclick="cancelAgentFill()" style="display: none;">Cancel</button>
+          </div>
+
+          <details class="advanced-options" style="margin-top: 12px;">
+            <summary>More options</summary>
+
+            <label for="agentFillInstructions">Describe the data to fill</label>
+            <textarea id="agentFillInstructions" class="compact-textarea" placeholder="Optional. Example: Find official LinkedIn URLs only."></textarea>
+
+            <label for="agentFillEffort">Effort</label>
+            <select id="agentFillEffort">
+              <option value="auto" selected>Auto</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="xhigh">Extra high</option>
+            </select>
+
+            <div class="checkbox-row">
+              <input type="checkbox" id="agentFillOverwrite">
+              <label for="agentFillOverwrite">Overwrite existing cells</label>
+            </div>
+          </details>
+        </div>
+
+        <div id="agentFillStatus" class="status-display">
+          Select cells in the sheet, then fill them.
+        </div>
+        <div id="agentFillMeta" class="agent-meta"></div>
       </div>
-      <div id="agentMeta" class="agent-meta"></div>
     </div>
 
     <!-- Batch Operations Tab -->
@@ -698,6 +804,17 @@
       let currentAgentTableConfig = null;
       let agentPollTimer = null;
       let agentProgress = { searches: 0, cost: 0 };
+      let agentFillQueue = [];
+      let agentFillActiveRuns = {};
+      let agentFillActiveCount = 0;
+      let agentFillCompletedJobs = 0;
+      let agentFillTotalJobs = 0;
+      let agentFillIssues = 0;
+      let agentFillFilledCells = 0;
+      let agentFillCancelled = false;
+      let agentFillConfig = null;
+      let agentFillProgress = { completedSearches: 0, completedCost: 0 };
+      const AGENT_FILL_CONCURRENCY = 2;
 
       // --- Tab Management ---
       function openTab(evt, tabName) {
@@ -973,6 +1090,14 @@
       });
 
       // --- Agent Table Logic ---
+      function setAgentMode(mode) {
+        const isFill = mode === 'fill';
+        document.getElementById('agentCreatePanel').hidden = isFill;
+        document.getElementById('agentFillPanel').hidden = !isFill;
+        document.getElementById('agentCreateModeButton').classList.toggle('active', !isFill);
+        document.getElementById('agentFillModeButton').classList.toggle('active', isFill);
+      }
+
       function getAgentConfigFromForm() {
         return {
           prompt: document.getElementById('agentPrompt').value.trim(),
@@ -1200,6 +1325,312 @@
         }
         setAgentStatus(`Error: ${errorMsg}`, 'error');
         console.error('Agent failure:', error);
+      }
+
+      // --- Agent Fill Logic ---
+      function getAgentFillConfigFromForm() {
+        return {
+          instructions: document.getElementById('agentFillInstructions').value.trim(),
+          effort: document.getElementById('agentFillEffort').value,
+          overwrite: document.getElementById('agentFillOverwrite').checked
+        };
+      }
+
+      function setAgentFillBusy(isBusy) {
+        const fillButton = document.getElementById('agentFillButton');
+        fillButton.disabled = isBusy;
+        fillButton.textContent = isBusy ? 'Filling selected cells...' : 'Fill selected cells';
+        document.getElementById('agentFillCancelButton').style.display = isBusy ? 'block' : 'none';
+      }
+
+      function setAgentFillStatus(message, type) {
+        const status = document.getElementById('agentFillStatus');
+        status.textContent = message;
+        status.classList.remove('success');
+        status.classList.remove('error');
+        if (type === 'success') {
+          status.classList.add('success');
+        } else if (type === 'error') {
+          status.classList.add('error');
+        }
+      }
+
+      function setAgentFillMeta(message) {
+        document.getElementById('agentFillMeta').textContent = message || '';
+      }
+
+      function getAgentCostTotal(run) {
+        if (run && run.costDollars && typeof run.costDollars.total === 'number') {
+          return run.costDollars.total;
+        }
+        return 0;
+      }
+
+      function updateAgentFillRunProgress(runId, run) {
+        const active = agentFillActiveRuns[runId];
+        if (!active || !run) return;
+        if (run.usage && typeof run.usage.searches === 'number') {
+          active.searches = Math.max(active.searches || 0, run.usage.searches);
+        }
+        const cost = getAgentCostTotal(run);
+        if (cost > 0) {
+          active.cost = Math.max(active.cost || 0, cost);
+        }
+      }
+
+      function updateAgentFillMetaProgress() {
+        const activeTotals = Object.values(agentFillActiveRuns).reduce((totals, active) => {
+          totals.searches += active.searches || 0;
+          totals.cost += active.cost || 0;
+          return totals;
+        }, { searches: 0, cost: 0 });
+        const searches = (agentFillProgress.completedSearches || 0) + activeTotals.searches;
+        const cost = (agentFillProgress.completedCost || 0) + activeTotals.cost;
+        const pieces = [];
+        if (searches > 0) pieces.push(`Searches: ${searches}`);
+        if (cost > 0) pieces.push(`Cost: $${cost.toFixed(4)}`);
+        if (pieces.length > 0) {
+          setAgentFillMeta(pieces.join(' · '));
+        } else if (agentFillTotalJobs > 1) {
+          setAgentFillMeta('Working through the selection.');
+        } else {
+          setAgentFillMeta('');
+        }
+      }
+
+      function resetAgentFillState() {
+        Object.keys(agentFillActiveRuns).forEach(runId => {
+          if (agentFillActiveRuns[runId].timer) {
+            clearTimeout(agentFillActiveRuns[runId].timer);
+          }
+        });
+        agentFillQueue = [];
+        agentFillActiveRuns = {};
+        agentFillActiveCount = 0;
+        agentFillCompletedJobs = 0;
+        agentFillTotalJobs = 0;
+        agentFillIssues = 0;
+        agentFillFilledCells = 0;
+        agentFillCancelled = false;
+        agentFillConfig = null;
+        agentFillProgress = { completedSearches: 0, completedCost: 0 };
+      }
+
+      function runAgentFill() {
+        const config = getAgentFillConfigFromForm();
+        resetAgentFillState();
+        agentFillConfig = config;
+        setAgentFillBusy(true);
+        setAgentFillMeta('');
+        setAgentFillStatus('Authorizing...');
+
+        google.script.run
+          .withSuccessHandler(() => {
+            setAgentFillStatus('Preparing selection...');
+
+            google.script.run
+              .withSuccessHandler(result => {
+                if (!result.success) {
+                  setAgentFillStatus(result.message || 'Could not prepare selection.', 'error');
+                  setAgentFillBusy(false);
+                  return;
+                }
+
+                agentFillQueue = result.jobs || [];
+                agentFillTotalJobs = agentFillQueue.length;
+                if (agentFillTotalJobs === 0) {
+                  setAgentFillStatus('No blank cells selected.', 'error');
+                  setAgentFillBusy(false);
+                  return;
+                }
+
+                setAgentFillBusy(true);
+                setAgentFillStatus('Filling selection...');
+                updateAgentFillMetaProgress();
+                startNextAgentFillJobs(config);
+              })
+              .withFailureHandler(error => {
+                handleAgentFillFailure(error);
+                setAgentFillBusy(false);
+              })
+              .prepareAgentFillJobs(config);
+          })
+          .withFailureHandler(error => {
+            handleAgentFillFailure(error);
+            setAgentFillBusy(false);
+          })
+          .ensureAuthorized();
+      }
+
+      function startNextAgentFillJobs(config) {
+        if (agentFillCancelled) return;
+
+        while (agentFillActiveCount < AGENT_FILL_CONCURRENCY && agentFillQueue.length > 0) {
+          const job = agentFillQueue.shift();
+          agentFillActiveCount += 1;
+
+          google.script.run
+            .withSuccessHandler(result => {
+              if (!result.success) {
+                agentFillActiveCount -= 1;
+                agentFillCompletedJobs += 1;
+                agentFillIssues += 1;
+                startNextAgentFillJobs(config);
+                maybeFinishAgentFill();
+                return;
+              }
+
+              const runId = result.run.id;
+              agentFillActiveRuns[runId] = {
+                fillConfig: result.fillConfig,
+                config: config,
+                timer: null,
+                searches: 0,
+                cost: 0
+              };
+              updateAgentFillRunProgress(runId, result.run);
+              updateAgentFillMetaProgress();
+              pollAgentFillRun(runId);
+            })
+            .withFailureHandler(error => {
+              agentFillActiveCount -= 1;
+              agentFillCompletedJobs += 1;
+              agentFillIssues += 1;
+              console.error('Agent fill start failure:', error);
+              startNextAgentFillJobs(config);
+              maybeFinishAgentFill();
+            })
+            .startAgentFillRun(job, config);
+        }
+
+        maybeFinishAgentFill();
+      }
+
+      function pollAgentFillRun(runId) {
+        if (agentFillCancelled || !agentFillActiveRuns[runId]) return;
+
+        google.script.run
+          .withSuccessHandler(result => {
+            if (!agentFillActiveRuns[runId]) return;
+
+            if (!result.success) {
+              if (result.retryable) {
+                const retryAfterMs = Math.max(Number(result.retryAfterMs) || 10000, 3000);
+                agentFillActiveRuns[runId].timer = setTimeout(() => pollAgentFillRun(runId), retryAfterMs);
+                return;
+              }
+              finishAgentFillRun(runId, false);
+              return;
+            }
+
+            const run = result.run;
+            updateAgentFillRunProgress(runId, run);
+            updateAgentFillMetaProgress();
+            if (run.status === 'queued' || run.status === 'running') {
+              agentFillActiveRuns[runId].timer = setTimeout(() => pollAgentFillRun(runId), 3000);
+              return;
+            }
+
+            if (run.status === 'completed') {
+              writeAgentFillOutput(runId);
+              return;
+            }
+
+            finishAgentFillRun(runId, false);
+          })
+          .withFailureHandler(error => {
+            console.error('Agent fill poll failure:', error);
+            finishAgentFillRun(runId, false);
+          })
+          .getAgentRunStatus(runId);
+      }
+
+      function writeAgentFillOutput(runId) {
+        const active = agentFillActiveRuns[runId];
+        if (!active) return;
+
+        google.script.run
+          .withSuccessHandler(result => {
+            if (!result.success) {
+              finishAgentFillRun(runId, false);
+              return;
+            }
+
+            updateAgentFillRunProgress(runId, result);
+            agentFillFilledCells += Number(result.filled) || 0;
+            if ((result.blank || 0) > 0 || (result.skipped || 0) > 0) {
+              agentFillIssues += 1;
+            }
+            finishAgentFillRun(runId, true);
+          })
+          .withFailureHandler(error => {
+            console.error('Agent fill write failure:', error);
+            finishAgentFillRun(runId, false);
+          })
+          .writeAgentFillRunToSheet(runId, active.fillConfig);
+      }
+
+      function finishAgentFillRun(runId, success) {
+        const active = agentFillActiveRuns[runId];
+        if (active && active.timer) {
+          clearTimeout(active.timer);
+        }
+        if (active) {
+          agentFillProgress.completedSearches += active.searches || 0;
+          agentFillProgress.completedCost += active.cost || 0;
+        }
+        delete agentFillActiveRuns[runId];
+        agentFillActiveCount = Math.max(agentFillActiveCount - 1, 0);
+        agentFillCompletedJobs += 1;
+        if (!success) {
+          agentFillIssues += 1;
+        }
+        startNextAgentFillJobs(agentFillConfig || getAgentFillConfigFromForm());
+        maybeFinishAgentFill();
+      }
+
+      function maybeFinishAgentFill() {
+        if (agentFillCancelled) return;
+        if (agentFillTotalJobs === 0) return;
+        if (agentFillCompletedJobs < agentFillTotalJobs || agentFillActiveCount > 0 || agentFillQueue.length > 0) {
+          return;
+        }
+
+        setAgentFillBusy(false);
+        updateAgentFillMetaProgress();
+        if (agentFillFilledCells > 0 && agentFillIssues > 0) {
+          setAgentFillStatus('Done. Some cells were left blank.', 'success');
+        } else if (agentFillFilledCells > 0) {
+          setAgentFillStatus('Done.', 'success');
+        } else if (agentFillIssues > 0) {
+          setAgentFillStatus('No values were found.', 'error');
+        } else {
+          setAgentFillStatus('Done.', 'success');
+        }
+      }
+
+      function cancelAgentFill() {
+        agentFillCancelled = true;
+        agentFillQueue = [];
+        Object.keys(agentFillActiveRuns).forEach(runId => {
+          const active = agentFillActiveRuns[runId];
+          if (active.timer) clearTimeout(active.timer);
+          google.script.run.cancelAgentRun(runId);
+        });
+        agentFillActiveRuns = {};
+        agentFillActiveCount = 0;
+        setAgentFillBusy(false);
+        setAgentFillMeta('');
+        setAgentFillStatus('Fill cancelled.', 'error');
+      }
+
+      function handleAgentFillFailure(error) {
+        const errorMsg = (error && (error.message || error.toString())) || 'Unknown error';
+        if (isMultiAccountError(errorMsg)) {
+          showMultiAccountBanner(errorMsg);
+        }
+        setAgentFillStatus(`Error: ${errorMsg}`, 'error');
+        console.error('Agent fill failure:', error);
       }
 
       // --- Batch Operations Logic ---
