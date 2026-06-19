@@ -18,7 +18,8 @@
       .tab-container {
         display: flex;
         border-bottom: 1px solid #D1D5DB;
-        padding: 0 15px;
+        padding: 0 10px;
+        overflow-x: auto;
       }
 
 
@@ -57,7 +58,7 @@
         font-weight: 500;
         font-size: 0.9em;
       }
-      input[type="password"], select, input[type="text"], input[type="number"] {
+      input[type="password"], select, input[type="text"], input[type="number"], textarea {
         width: 100%; /* Full width */
         padding: 10px;
         margin-bottom: 15px; /* Increased spacing */
@@ -69,7 +70,12 @@
         font-size: 0.9em; /* Consistent font size */
         font-family: sans-serif;
       }
-       input[type="password"]:focus, select:focus, input[type="text"]:focus, input[type="number"]:focus {
+      textarea {
+        min-height: 120px;
+        resize: vertical;
+        line-height: 1.4;
+      }
+       input[type="password"]:focus, select:focus, input[type="text"]:focus, input[type="number"]:focus, textarea:focus {
         border-color: #1F40ED; /* Exa accent on focus */
         outline: none; /* Remove default outline */
         box-shadow: 0 0 0 2px rgba(31, 64, 237, 0.2); /* Subtle glow */
@@ -90,7 +96,7 @@
       }
       
       .tab-button {
-        padding: 12px 20px;
+        padding: 12px 11px;
         cursor: pointer;
         border: none;
         background-color: transparent;
@@ -101,6 +107,8 @@
         border-bottom: 2px solid transparent;
         margin-bottom: -1px;
         border-radius: 0;
+        white-space: nowrap;
+        flex: 0 0 auto;
       }
        button:disabled {
         background-color: #9CA3AF; /* Grey out when disabled */
@@ -129,42 +137,127 @@
         background-color: #F0FDF4;
       }
        .doc-section {
-         margin-bottom: 20px;
-         padding-bottom: 15px;
-         border-bottom: 1px dashed #D1D5DB;
+         margin-top: 12px;
+         padding-top: 12px;
+         border-top: 1px solid #E5E7EB;
        }
-       .doc-section:last-child {
-         border-bottom: none;
+       .doc-section:first-of-type {
+         margin-top: 10px;
        }
        .doc-section h4 {
          margin: 0 0 8px 0;
          font-weight: 600;
-         color: #1F40ED; /* Accent color for function names */
+         color: #111827;
+         font-size: 0.95em;
        }
        .doc-section p {
-         margin: 0 0 5px 0;
+         margin: 0 0 7px 0;
          font-size: 0.85em;
-         line-height: 1.4;
+         line-height: 1.45;
          font-family: sans-serif;
        }
-        .doc-section code {
-          background-color: #E5E7EB;
-          padding: 2px 5px;
-          border-radius: 3px;
-          font-family: monospace;
-          font-size: 0.9em;
-        }
+      .doc-section code {
+        background-color: #F3F4F6;
+        border: 1px solid #E5E7EB;
+        padding: 2px 5px;
+        border-radius: 3px;
+        font-family: monospace;
+        font-size: 0.9em;
+      }
 
-
-      /* Batch operations styles */
       .batch-buttons {
         display: flex;
         flex-direction: column;
         gap: 10px;
       }
-      
+
       .batch-buttons button {
         width: 100%;
+      }
+
+      .tab-intro {
+        color: #4B5563;
+        font-size: 0.9em;
+        line-height: 1.45;
+        margin: -4px 0 16px 0;
+      }
+
+      .tab-intro p {
+        margin: 0 0 8px 0;
+      }
+
+      .form-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+
+      .agent-actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 5px;
+      }
+
+      .agent-actions button {
+        flex: 1;
+      }
+
+      .advanced-options {
+        margin-bottom: 12px;
+      }
+
+      .advanced-options summary {
+        cursor: pointer;
+        color: #4B5563;
+        font-size: 0.85em;
+        margin-bottom: 10px;
+      }
+
+      .advanced-options select,
+      .advanced-options input {
+        margin-bottom: 10px;
+      }
+
+      .secondary-button {
+        background-color: #4B5563;
+      }
+
+      .secondary-note {
+        background-color: #F9FAFB;
+        border: 1px solid #E5E7EB;
+        border-radius: 6px;
+        color: #4B5563;
+        font-size: 0.85em;
+        line-height: 1.4;
+        margin-top: 15px;
+        padding: 12px;
+      }
+
+      .secondary-note strong {
+        color: #374151;
+      }
+
+      .secondary-note p {
+        margin: 8px 0 0 0;
+      }
+
+      .warning-button {
+        background-color: #DC2626;
+      }
+
+      .small-help {
+        color: #6B7280;
+        font-size: 0.8em;
+        line-height: 1.4;
+        margin: -8px 0 12px 0;
+      }
+
+      .agent-meta {
+        margin-top: 10px;
+        color: #4B5563;
+        font-size: 0.8em;
+        line-height: 1.4;
+        word-wrap: break-word;
       }
       
       .status-display {
@@ -358,35 +451,77 @@
       }
 
       .multi-account-banner .technical-details {
+        display: none;
+      }
+
+      .help-details {
         margin-top: 12px;
-        padding-top: 12px;
-        border-top: 1px solid #FCA5A5;
-        font-size: 0.8em;
-        color: #991B1B;
-        font-style: italic;
-      }
-
-      /* Static multi-account warning styles */
-      .multi-account-warning {
-        background-color: #FEF9C3;
-        border: 1px solid #EAB308;
-        border-left: 4px solid #EAB308;
-        border-radius: 6px;
-        padding: 12px;
-        margin-bottom: 20px;
+        color: #4B5563;
         font-size: 0.85em;
-        color: #713F12;
+        line-height: 1.45;
       }
 
-      .multi-account-warning strong {
-        color: #854D0E;
-        font-weight: 600;
+      .help-details summary {
+        cursor: pointer;
+        color: #374151;
+        font-family: sans-serif;
+        font-size: 1em;
+        font-weight: 400;
       }
 
-      .multi-account-warning a {
-        color: #CA8A04;
-        text-decoration: underline;
+      .help-details p {
+        margin: 8px 0;
+      }
+
+      .help-details a {
+        color: #1F40ED;
+        text-decoration: none;
         font-weight: 500;
+      }
+
+      .api-key-help {
+        color: #4B5563;
+        font-size: 0.85em;
+      }
+
+      .api-key-help p {
+        margin: 0 0 6px 0;
+      }
+
+      .api-key-help a {
+        color: #1F40ED;
+        text-decoration: none;
+        font-weight: 500;
+      }
+
+      .usage-help {
+        color: #4B5563;
+      }
+
+      .usage-help details {
+        font-size: 0.85em;
+        line-height: 1.45;
+      }
+
+      .usage-help summary {
+        cursor: pointer;
+        color: #374151;
+        font-family: sans-serif;
+        font-size: 1em;
+        font-weight: 500;
+      }
+
+      .formula-example {
+        background-color: #F3F4F6;
+        border: 1px solid #E5E7EB;
+        border-radius: 4px;
+        color: #111827;
+        font-family: monospace;
+        font-size: 0.85em;
+        line-height: 1.35;
+        margin: 6px 0;
+        padding: 6px 8px;
+        word-break: break-word;
       }
 
     </style>
@@ -395,34 +530,29 @@
 
     <!-- Multi-account warning banner (hidden by default, shown when auth issues detected) -->
     <div id="multiAccountBanner" class="multi-account-banner">
-      <h4>⚠️ Multiple Google Accounts Detected</h4>
-      <p><strong>Your API key cannot be saved or loaded because you're logged into multiple Google accounts.</strong></p>
-      <p><strong>To fix this issue, choose one of these options:</strong></p>
+      <h4>API Key Trouble</h4>
+      <p><strong>Your API key may not save because this browser is signed in to more than one Google account.</strong></p>
+      <p>Try one of these fixes:</p>
       <ol>
-        <li><strong>Sign out of all Google accounts except the one you're using for this sheet</strong></li>
-        <li><strong>Use an incognito/private window with only one Google account</strong></li>
-        <li><strong>Make sure your default Google account matches the account for this sheet</strong></li>
+        <li>Sign out of extra Google accounts.</li>
+        <li>Use an incognito window with only this Google account signed in.</li>
+        <li>Make sure your default Google account is the same one that owns this sheet.</li>
       </ol>
       <p>
-        <a href="https://developers.google.com/apps-script/guides/projects#fix_issues_with_multiple_google_accounts" target="_blank">Learn more about fixing multi-account issues →</a>
+        <a href="https://developers.google.com/apps-script/guides/projects#fix_issues_with_multiple_google_accounts" target="_blank">Learn more</a>
       </p>
       <div class="technical-details" id="technicalDetails"></div>
     </div>
 
     <div class="tab-container">
-      <button class="tab-button active" onclick="openTab(event, 'apiKeyTab')">API Key</button>
+      <button class="tab-button active" onclick="openTab(event, 'apiKeyTab')">Settings</button>
+      <button class="tab-button" onclick="openTab(event, 'agentTab')">Exa Agent</button>
       <button class="tab-button" onclick="openTab(event, 'batchTab')">Batch</button>
-      <button class="tab-button" onclick="openTab(event, 'docsTab')">Docs</button>
     </div>
 
     <!-- API Key Tab -->
     <div id="apiKeyTab" class="tab-content active">
-      <h3>API Key</h3>
-      
-      <!-- Static multi-account warning -->
-      <div class="multi-account-warning">
-        <strong>⚠️ Note:</strong> If you're logged into multiple Google accounts, you may experience issues saving or loading your API key. If this happens, try using an incognito window with only one account or sign out of extra accounts. <a href="https://developers.google.com/apps-script/guides/projects#fix_issues_with_multiple_google_accounts" target="_blank">Learn more</a>
-      </div>
+      <h3>Settings</h3>
       
       <!-- Key Display Section -->
       <div id="keyDisplaySection" class="key-section" style="display: none;">
@@ -439,131 +569,135 @@
       
       <!-- Add Key Section -->
       <div id="addKeySection" class="key-section">
-        <label for="apiKey">API Key:</label>
+        <label for="apiKey">API key</label>
         <input type="password" id="apiKey" placeholder="Paste your Exa API key here">
         
-        <button id="saveButton" onclick="saveKey()">Save API Key</button>
+        <button id="saveButton" onclick="saveKey()">Save key</button>
       </div>
-      
+
       <div id="apiKeyStatus" class="status-display">
         <span id="apiKeyStatusText">No API key set. Add a key to get started.</span>
       </div>
-      
-      <div style="margin-top: 20px; padding: 15px; background-color: #F3F4F6; border-radius: 6px; font-size: 0.85em;">
-        <p style="margin: 0; color: #4B5563;">Need an API key? Get one from your Exa dashboard:</p>
-        <a href="https://dashboard.exa.ai/api-keys" target="_blank" style="color: #1F40ED; text-decoration: none; font-weight: 500;">https://dashboard.exa.ai/api-keys</a>
+
+      <div class="key-section api-key-help">
+        <p>Need an API key?</p>
+        <a href="https://dashboard.exa.ai/api-keys" target="_blank">Open your Exa dashboard</a>
+
+        <details class="help-details">
+          <summary>Trouble using your API key?</summary>
+          <p>If the key does not save or load, it is usually because this browser is signed in to more than one Google account.</p>
+          <p>Try an incognito window with only this Google account signed in, or sign out of extra Google accounts and refresh the sheet.</p>
+          <p><a href="https://developers.google.com/apps-script/guides/projects#fix_issues_with_multiple_google_accounts" target="_blank">Learn more</a></p>
+        </details>
       </div>
+
+      <div class="key-section usage-help">
+        <details>
+          <summary>Guide</summary>
+
+          <div class="doc-section">
+            <h4>Exa Agent</h4>
+            <p>Use this when you want Exa to create a full table.</p>
+            <p>Open the Exa Agent tab, write what table you want, then click <strong>Run Agent</strong>. The table starts at your selected cell unless you choose another cell in More options.</p>
+            <p>Example: <code>Find top 40 AI companies with website, CEO, founding date, and headquarters.</code></p>
+          </div>
+
+          <div class="doc-section">
+            <h4>EXA formula</h4>
+            <p>Use this inside a cell when you want one answer for one row.</p>
+            <p>Basic format: <code>=EXA("what you want", cell)</code></p>
+            <div class="formula-example">=EXA("Return only the company website URL", A2)</div>
+            <div class="formula-example">=EXA("Return only the CEO name", A2)</div>
+            <p>The second part, like <code>A2</code>, is the cell Exa should use as context. You can fill the formula down a column to run it for many rows.</p>
+          </div>
+
+          <div class="doc-section">
+            <h4>Batch</h4>
+            <p>Select cells with Exa formulas, then use Batch to refresh them or convert them to values.</p>
+            <p>Convert to values when you want to keep the current results and stop the formulas from running again.</p>
+          </div>
+        </details>
+      </div>
+    </div>
+
+    <!-- Agent Table Tab -->
+    <div id="agentTab" class="tab-content">
+      <h3>Exa Agent</h3>
+
+      <div class="key-section">
+        <label for="agentPrompt">Prompt</label>
+        <textarea id="agentPrompt" placeholder="Find top 40 AI companies and return company name, website URL, CEO, founding date, headquarters, and a short description."></textarea>
+
+        <details class="advanced-options">
+          <summary>More options</summary>
+
+          <label for="agentEffort">Effort</label>
+          <select id="agentEffort">
+            <option value="auto" selected>Auto</option>
+            <option value="minimal">Minimal</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+            <option value="xhigh">Extra high</option>
+          </select>
+          <div class="small-help">Auto works best for most tables.</div>
+
+          <label for="agentColumns">Columns</label>
+          <input type="text" id="agentColumns" placeholder="company name, website URL, CEO">
+          <div class="small-help">Leave blank and the Agent will choose the columns.</div>
+
+          <label for="agentStartCell">Write table at</label>
+          <input type="text" id="agentStartCell" placeholder="A1">
+          <div class="small-help">Leave blank to use the selected cell.</div>
+        </details>
+
+        <div class="agent-actions">
+          <button id="agentRunButton" onclick="runAgentTable()">Run Agent</button>
+          <button id="agentCancelButton" class="warning-button" onclick="cancelCurrentAgentRun()" style="display: none;">Cancel</button>
+        </div>
+      </div>
+
+      <div id="agentStatus" class="status-display">
+        Write a prompt, then run the Agent.
+      </div>
+      <div id="agentMeta" class="agent-meta"></div>
     </div>
 
     <!-- Batch Operations Tab -->
     <div id="batchTab" class="tab-content">
-      <h3>Batch Operations</h3>
-      
+      <h3>Batch</h3>
+
+      <div class="tab-intro">
+        <p>Use Batch when you want to work with many Exa formula cells at once.</p>
+        <p>Select the cells first, then refresh them or save the current results as normal text.</p>
+      </div>
+
       <div class="batch-buttons">
-        <button id="refreshSelected" onclick="performBatchOperation('refresh')">Refresh Selected Cells</button>
-        <button id="convertToValues" onclick="convertSelectedToValues()" style="background-color: #059669;">Convert to Values (Freeze)</button>
+        <button id="refreshSelected" onclick="performBatchOperation('refresh')">Refresh selected cells</button>
+        <button id="convertToValues" class="secondary-button" onclick="convertSelectedToValues()">Convert to values</button>
       </div>
-      
+
       <div id="batchStatus" class="status-display">
-        Select cells containing Exa functions and choose an operation.
+        Select cells with Exa formulas, then choose an action.
       </div>
-      
-      <div style="margin-top: 15px; padding: 12px; background-color: #FEF3C7; border: 1px solid #F59E0B; border-radius: 6px; font-size: 0.85em;">
-        <strong style="color: #92400E;">Tip: Prevent unexpected charges</strong>
-        <p style="margin: 8px 0 0 0; color: #78350F; line-height: 1.4;">
-          Exa functions automatically recalculate when the sheet refreshes. Use <strong>"Convert to Values"</strong> to freeze results and prevent additional API calls. You can always re-add the formula later if you need fresh data.
+
+      <div class="secondary-note">
+        <strong>Tip</strong>
+        <p>
+          Exa formulas can run again when Google Sheets recalculates. Convert to values when you want to keep results fixed.
         </p>
       </div>
     </div>
-
-    <!-- Documentation Tab -->
-    <div id="docsTab" class="tab-content">
-      <h3>Documentation</h3>
-      
-      <div class="doc-section" style="background-color: #FEF3C7; border: 1px solid #F59E0B; border-radius: 6px; padding: 12px; margin-bottom: 20px;">
-        <h4 style="color: #92400E; margin-top: 0;">Important: Controlling API Usage</h4>
-        <p style="color: #78350F;"><strong>Auto-refresh behavior:</strong> Exa functions automatically recalculate when you open the sheet, edit cells, or when Google Sheets refreshes. Each recalculation uses API credits.</p>
-        <p style="color: #78350F;"><strong>To prevent unexpected charges:</strong></p>
-        <p style="color: #78350F;">1. Use the <code>numResults</code> parameter to limit results (e.g., <code>=EXA_SEARCH("query", 3)</code> returns only 3 URLs)</p>
-        <p style="color: #78350F;">2. After getting results, copy cells and "Paste as Values" (Ctrl+Shift+V) to freeze them</p>
-        <p style="color: #78350F;">3. Remove your API key from the sidebar when not actively using the add-on</p>
-        <p style="color: #78350F;"><strong>Tip:</strong> Start with small batches (10-20 rows) before scaling up to hundreds of rows.</p>
-      </div>
-
-      <div class="doc-section" style="background-color: #EFF6FF; border: 1px solid #3B82F6; border-radius: 6px; padding: 12px;">
-        <h4 style="color: #1D4ED8; margin-top: 0;">EXA (Recommended)</h4>
-        <p>Simple AI-powered data enrichment. Just describe what you want!</p>
-        <p><strong>Parameters:</strong></p>
-        <p><code>prompt</code> (string, required): What information you want.</p>
-        <p><code>context</code> (string/cell, optional): The data to enrich (e.g., company name in A1).</p>
-        <p><strong>Examples:</strong></p>
-        <p style="font-family: monospace; font-size: 0.85em; background-color: #F3F4F6; padding: 4px 8px; border-radius: 4px; margin: 4px 0;">=EXA("Return only the company website URL", A1)</p>
-        <p style="font-family: monospace; font-size: 0.85em; background-color: #F3F4F6; padding: 4px 8px; border-radius: 4px; margin: 4px 0;">=EXA("Return only the company headcount", A1)</p>
-        <p style="font-family: monospace; font-size: 0.85em; background-color: #F3F4F6; padding: 4px 8px; border-radius: 4px; margin: 4px 0;">=EXA("Return only the CEO name", A1)</p>
-        <p style="font-family: monospace; font-size: 0.85em; background-color: #F3F4F6; padding: 4px 8px; border-radius: 4px; margin: 4px 0;">=EXA("Return the Amazon rating of this product", A1)</p>
-        <p style="margin-top: 8px;"><em>For advanced options (system prompt, output schema, citations), use EXA_ANSWER.</em></p>
-      </div>
-
-      <div class="doc-section">
-        <h4>EXA_ANSWER</h4>
-        <p>Advanced version with system prompt, output schema, and citation options.</p>
-        <p><strong>Parameters:</strong></p>
-        <p><code>prompt</code> (string, required): The main question/prompt.</p>
-        <p><code>prefix</code> (string, optional): Text added before the prompt.</p>
-        <p><code>suffix</code> (string, optional): Text added after the prompt.</p>
-        <p><code>includeCitations</code> (boolean, optional): If TRUE, includes source citations. Defaults to FALSE.</p>
-        <p><code>systemPrompt</code> (string, optional): System instructions to control output format (e.g., "only return a number"). Uses chat completions endpoint.</p>
-        <p><code>outputSchema</code> (string, optional): JSON schema for structured output. <a href="https://dashboard.exa.ai/playground/answer" target="_blank">Generate schemas here</a>.</p>
-        <p><code>returnRawJson</code> (boolean, optional): If TRUE and outputSchema is provided, returns raw JSON instead of extracted value. Defaults to FALSE.</p>
-        <p><strong>Returns:</strong> The answer, extracted value from JSON schema, or raw JSON if returnRawJson is TRUE.</p>
-        <p><strong>Examples:</strong></p>
-        <p style="font-family: monospace; font-size: 0.85em; background-color: #F3F4F6; padding: 4px 8px; border-radius: 4px; margin: 4px 0;">=EXA_ANSWER("Modal AI headcount", "", "", FALSE, "only return a number")</p>
-        <p style="font-family: monospace; font-size: 0.85em; background-color: #F3F4F6; padding: 4px 8px; border-radius: 4px; margin: 4px 0;">=EXA_ANSWER("OpenAI CEO", "", "", TRUE)</p>
-      </div>
-
-      <div class="doc-section">
-        <h4>EXA_CONTENTS</h4>
-        <p>Retrieves the text content of a given URL using Exa /contents.</p>
-        <p><strong>Parameters:</strong></p>
-        <p><code>url</code> (string, required): The full URL (starting with http/https).</p>
-        <p><strong>Returns:</strong> The main text content of the URL.</p>
-      </div>
-
-      <div class="doc-section">
-        <h4>EXA_SEARCH</h4>
-        <p>Searches the web using the Exa /search endpoint.</p>
-        <p><strong>Parameters:</strong></p>
-        <p><code>query</code> (string, required): The search query.</p>
-        <p><code>numResults</code> (number, optional): Max results (1-10). Defaults to 1.</p>
-        <p><code>searchType</code> (string, optional): 'auto', 'neural', or 'keyword'. Defaults to 'auto'.</p>
-        <p><code>prefix</code> (string, optional): Text added before the query.</p>
-        <p><code>suffix</code> (string, optional): Text added after the query.</p>
-        <p><code>includeDomainsStr</code> (string, optional): Comma-separated domains to include (e.g., "linkedin.com,crunchbase.com").</p>
-        <p><code>excludeDomainsStr</code> (string, optional): Comma-separated domains to exclude (e.g., "wikipedia.org").</p>
-        <p><code>category</code> (string, optional): Filter by content type: "company", "research paper", "news", "github", "personal site", "pdf", "financial report", "people".</p>
-        <p><strong>Returns:</strong> A vertical list of result URLs.</p>
-      </div>
-
-      <div class="doc-section">
-        <h4>EXA_FINDSIMILAR</h4>
-        <p>Finds URLs similar to the input URL using Exa /findSimilar.</p>
-        <p><strong>Parameters:</strong></p>
-        <p><code>url</code> (string, required): The URL to find similar links for.</p>
-        <p><code>numResults</code> (number, optional): Max results (1-10). Defaults to 1.</p>
-        <p><code>includeDomainsStr</code> (string, optional): Comma-separated domains to include.</p>
-        <p><code>excludeDomainsStr</code> (string, optional): Comma-separated domains to exclude.</p>
-        <p><code>includeTextStr</code> (string, optional): Phrase that MUST be in results.</p>
-        <p><code>excludeTextStr</code> (string, optional): Phrase that MUST NOT be in results.</p>
-        <p><strong>Returns:</strong> A vertical list of similar URLs.</p>
-      </div>
-    </div>
-
 
     <script>
       const apiKeyInput = document.getElementById('apiKey');
       const saveButton = document.getElementById('saveButton');
       const statusDiv = document.getElementById('apiKeyStatus');
       const statusText = document.getElementById('apiKeyStatusText');
+      let currentAgentRunId = null;
+      let currentAgentTableConfig = null;
+      let agentPollTimer = null;
+      let agentProgress = { searches: 0, cost: 0 };
 
       // --- Tab Management ---
       function openTab(evt, tabName) {
@@ -594,17 +728,23 @@
         const key = apiKeyInput.value.trim();
         
         if (!key) {
-            statusText.textContent = 'Please enter an API key.';
-            statusDiv.style.display = 'block';
-            return;
+          statusText.textContent = 'Please enter an API key.';
+          statusDiv.classList.remove('success');
+          statusDiv.classList.add('error');
+          statusDiv.style.display = 'block';
+          return;
         }
 
         saveButton.disabled = true;
         statusText.textContent = 'Authorizing...';
+        statusDiv.classList.remove('success');
+        statusDiv.classList.remove('error');
         statusDiv.style.display = 'block';
 
         // Generate request ID for correlation
-        const reqId = (crypto && crypto.randomUUID) ? crypto.randomUUID() : null;
+        const reqId = (window.crypto && window.crypto.randomUUID)
+          ? window.crypto.randomUUID()
+          : `req-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
         // First ensure authorization (this triggers OAuth consent if needed)
         google.script.run
@@ -653,7 +793,7 @@
         const technicalDetails = document.getElementById('technicalDetails');
         
         banner.classList.add('visible');
-        technicalDetails.textContent = `Technical error: ${errorMsg}`;
+        technicalDetails.textContent = '';
         
         // Scroll to top to ensure banner is visible
         window.scrollTo(0, 0);
@@ -693,7 +833,7 @@
           showMultiAccountBanner(errorMsg);
           
           // Also show error in status div for context
-          statusText.innerHTML = `<strong>Authorization Error:</strong> Multiple Google accounts detected. See the warning above for instructions.`;
+          statusText.textContent = 'API key trouble. Try the steps above.';
         } else {
           statusText.textContent = `Error: ${errorMsg}`;
         }
@@ -711,6 +851,8 @@
         }
         
         statusText.textContent = 'Removing...';
+        statusDiv.classList.remove('success');
+        statusDiv.classList.remove('error');
         statusDiv.style.display = 'block';
         
         google.script.run
@@ -723,6 +865,8 @@
           })
           .withFailureHandler((error) => {
             statusText.textContent = `Error: ${error.message || error}`;
+            statusDiv.classList.remove('success');
+            statusDiv.classList.add('error');
             statusDiv.style.display = 'block';
             console.error("Remove API Key Error:", error);
           })
@@ -768,6 +912,8 @@
             
             // Hide banner on successful load
             hideMultiAccountBanner();
+            apiKeyStatus.classList.remove('success');
+            apiKeyStatus.classList.remove('error');
             
             if (keyData) {
               // Key exists - show display section, hide add section and status
@@ -795,10 +941,12 @@
               showMultiAccountBanner(errorMsg);
               
               // Also show error in status div for context
-              statusText.innerHTML = `<strong>Authorization Error:</strong> Multiple Google accounts detected. See the warning above for instructions.`;
+              statusText.textContent = 'API key trouble. Try the steps above.';
             } else {
               statusText.textContent = `Error loading API key: ${errorMsg}`;
             }
+            statusDiv.classList.remove('success');
+            statusDiv.classList.add('error');
             statusDiv.style.display = 'block';
           })
           .getApiKeyForUI();
@@ -824,66 +972,279 @@
         initializeApiKeyDisplay();
       });
 
-      // --- Batch Operations Logic ---
-      function performBatchOperation(operation) {
-        const batchStatusDiv = document.getElementById('batchStatus');
-        
-        // Disable buttons during operation
-        document.getElementById('refreshSelected').disabled = true;
-        document.getElementById('convertToValues').disabled = true;
-        
-        // Update status
-        batchStatusDiv.textContent = 'Processing...';
-        
+      // --- Agent Table Logic ---
+      function getAgentConfigFromForm() {
+        return {
+          prompt: document.getElementById('agentPrompt').value.trim(),
+          columns: document.getElementById('agentColumns').value.trim(),
+          effort: document.getElementById('agentEffort').value,
+          startCell: document.getElementById('agentStartCell').value.trim()
+        };
+      }
+
+      function getAgentWriteOptions(overwrite) {
+        return {
+          includeHeaders: true,
+          includeSources: false,
+          startCell: document.getElementById('agentStartCell').value.trim(),
+          overwrite: overwrite === true
+        };
+      }
+
+      function setAgentBusy(isBusy) {
+        document.getElementById('agentRunButton').disabled = isBusy;
+        document.getElementById('agentCancelButton').style.display = isBusy && currentAgentRunId ? 'block' : 'none';
+      }
+
+      function setAgentStatus(message, type) {
+        const status = document.getElementById('agentStatus');
+        status.textContent = message;
+        status.classList.remove('success');
+        status.classList.remove('error');
+        if (type === 'success') {
+          status.classList.add('success');
+        } else if (type === 'error') {
+          status.classList.add('error');
+        }
+      }
+
+      function updateAgentMeta(run) {
+        const meta = document.getElementById('agentMeta');
+        if (!run) {
+          meta.textContent = '';
+          return;
+        }
+
+        const pieces = [];
+        if (run.status) pieces.push(`Status: ${run.status}`);
+        if (run.usage && typeof run.usage.searches === 'number') {
+          agentProgress.searches = Math.max(agentProgress.searches || 0, run.usage.searches);
+        }
+        if (run.costDollars && typeof run.costDollars.total === 'number') {
+          agentProgress.cost = Math.max(agentProgress.cost || 0, run.costDollars.total);
+        }
+        if (agentProgress.searches > 0) pieces.push(`Searches: ${agentProgress.searches}`);
+        if (agentProgress.cost > 0) pieces.push(`Cost: $${agentProgress.cost.toFixed(4)}`);
+        meta.textContent = pieces.join(' · ');
+      }
+
+      function stopAgentPolling() {
+        if (agentPollTimer) {
+          clearTimeout(agentPollTimer);
+          agentPollTimer = null;
+        }
+      }
+
+      function runAgentTable() {
+        const config = getAgentConfigFromForm();
+        if (!config.prompt) {
+          setAgentStatus('Please enter an Agent prompt.', 'error');
+          return;
+        }
+
+        stopAgentPolling();
+        currentAgentRunId = null;
+        currentAgentTableConfig = null;
+        agentProgress = { searches: 0, cost: 0 };
+        updateAgentMeta(null);
+        setAgentBusy(true);
+        setAgentStatus('Authorizing...');
+
+        google.script.run
+          .withSuccessHandler(() => {
+            setAgentStatus('Starting Agent run...');
+
+            google.script.run
+              .withSuccessHandler(result => {
+                if (!result.success) {
+                  setAgentStatus(result.message || 'Failed to start Agent run.', 'error');
+                  setAgentBusy(false);
+                  return;
+                }
+
+                currentAgentRunId = result.run.id;
+                currentAgentTableConfig = result.tableConfig;
+                updateAgentMeta(result.run);
+                setAgentStatus('Agent is running...');
+                setAgentBusy(true);
+                pollAgentRun();
+              })
+              .withFailureHandler(error => {
+                handleAgentFailure(error);
+                setAgentBusy(false);
+              })
+              .startAgentTableRun(config);
+          })
+          .withFailureHandler(error => {
+            handleAgentFailure(error);
+            setAgentBusy(false);
+          })
+          .ensureAuthorized();
+      }
+
+      function pollAgentRun() {
+        if (!currentAgentRunId) {
+          setAgentBusy(false);
+          return;
+        }
+
+        google.script.run
+          .withSuccessHandler(result => {
+            if (!result.success) {
+              if (result.retryable) {
+                const retryAfterMs = Math.max(Number(result.retryAfterMs) || 10000, 3000);
+                setAgentStatus(result.message || 'Agent is still running. Checking again soon...');
+                agentPollTimer = setTimeout(pollAgentRun, retryAfterMs);
+                return;
+              }
+              setAgentStatus(result.message || 'Failed to poll Agent run.', 'error');
+              setAgentBusy(false);
+              return;
+            }
+
+            const run = result.run;
+            updateAgentMeta(run);
+
+            if (run.status === 'queued' || run.status === 'running') {
+              setAgentStatus(`Agent is ${run.status}...`);
+              agentPollTimer = setTimeout(pollAgentRun, 3000);
+              return;
+            }
+
+            if (run.status === 'completed') {
+              setAgentStatus('Agent complete. Writing table...');
+              writeAgentOutput(false);
+              return;
+            }
+
+            if (run.status === 'cancelled') {
+              setAgentStatus('Agent run cancelled.', 'error');
+              setAgentBusy(false);
+              return;
+            }
+
+            const stopReason = run.stopReason ? `: ${run.stopReason}` : '';
+            setAgentStatus(`Agent run ended with status: ${run.status}${stopReason}`, 'error');
+            setAgentBusy(false);
+          })
+          .withFailureHandler(error => {
+            handleAgentFailure(error);
+            setAgentBusy(false);
+          })
+          .getAgentRunStatus(currentAgentRunId);
+      }
+
+      function writeAgentOutput(overwrite) {
+        if (!currentAgentRunId || !currentAgentTableConfig) {
+          setAgentStatus('No completed Agent run is ready to write.', 'error');
+          setAgentBusy(false);
+          return;
+        }
+
         google.script.run
           .withSuccessHandler(result => {
             if (result.success) {
-              batchStatusDiv.textContent = `${result.message}`;
-            } else {
-              batchStatusDiv.textContent = `${result.message}`;
+              setAgentStatus(result.message, 'success');
+              setAgentBusy(false);
+              return;
             }
-            
-            // Re-enable buttons
+
+            if (result.needsConfirmation) {
+              const ok = confirm(`${result.message}\n\nOverwrite this range?`);
+              if (ok) {
+                writeAgentOutput(true);
+              } else {
+                setAgentStatus('Write cancelled. Select an empty output cell, then run the Agent again.', 'error');
+                setAgentBusy(false);
+              }
+              return;
+            }
+
+            setAgentStatus(result.message || 'Failed to write Agent output.', 'error');
+            setAgentBusy(false);
+          })
+          .withFailureHandler(error => {
+            handleAgentFailure(error);
+            setAgentBusy(false);
+          })
+          .writeAgentRunToSheet(currentAgentRunId, currentAgentTableConfig, getAgentWriteOptions(overwrite));
+      }
+
+      function cancelCurrentAgentRun() {
+        if (!currentAgentRunId) return;
+
+        stopAgentPolling();
+        setAgentStatus('Cancelling Agent run...');
+
+        google.script.run
+          .withSuccessHandler(result => {
+            if (result.success) {
+              updateAgentMeta(result.run);
+              setAgentStatus('Agent run cancelled.', 'error');
+            } else {
+              setAgentStatus(result.message || 'Failed to cancel Agent run.', 'error');
+            }
+            setAgentBusy(false);
+          })
+          .withFailureHandler(error => {
+            handleAgentFailure(error);
+            setAgentBusy(false);
+          })
+          .cancelAgentRun(currentAgentRunId);
+      }
+
+      function handleAgentFailure(error) {
+        const errorMsg = (error && (error.message || error.toString())) || 'Unknown error';
+        if (isMultiAccountError(errorMsg)) {
+          showMultiAccountBanner(errorMsg);
+        }
+        setAgentStatus(`Error: ${errorMsg}`, 'error');
+        console.error('Agent failure:', error);
+      }
+
+      // --- Batch Operations Logic ---
+      function performBatchOperation(operation) {
+        const batchStatusDiv = document.getElementById('batchStatus');
+
+        document.getElementById('refreshSelected').disabled = true;
+        document.getElementById('convertToValues').disabled = true;
+
+        batchStatusDiv.textContent = 'Working...';
+
+        google.script.run
+          .withSuccessHandler(result => {
+            batchStatusDiv.textContent = `${result.message}`;
+
             document.getElementById('refreshSelected').disabled = false;
             document.getElementById('convertToValues').disabled = false;
           })
           .withFailureHandler(error => {
             batchStatusDiv.textContent = `Error: ${error.message || error}`;
-            
-            // Re-enable buttons
+
             document.getElementById('refreshSelected').disabled = false;
             document.getElementById('convertToValues').disabled = false;
           })
           .processBatchOperation(operation);
       }
-      
-      // Convert selected Exa functions to static values (freeze)
+
       function convertSelectedToValues() {
         const batchStatusDiv = document.getElementById('batchStatus');
-        
-        // Disable buttons during operation
+
         document.getElementById('refreshSelected').disabled = true;
         document.getElementById('convertToValues').disabled = true;
-        
-        // Update status
-        batchStatusDiv.textContent = 'Converting to values...';
-        
+
+        batchStatusDiv.textContent = 'Converting...';
+
         google.script.run
           .withSuccessHandler(result => {
-            if (result.success) {
-              batchStatusDiv.textContent = `${result.message}`;
-            } else {
-              batchStatusDiv.textContent = `${result.message}`;
-            }
-            
-            // Re-enable buttons
+            batchStatusDiv.textContent = `${result.message}`;
+
             document.getElementById('refreshSelected').disabled = false;
             document.getElementById('convertToValues').disabled = false;
           })
           .withFailureHandler(error => {
             batchStatusDiv.textContent = `Error: ${error.message || error}`;
-            
-            // Re-enable buttons
+
             document.getElementById('refreshSelected').disabled = false;
             document.getElementById('convertToValues').disabled = false;
           })

@@ -878,6 +878,533 @@ describe('EXA_FINDSIMILAR', () => {
   });
 });
 
+describe('Agent Table', () => {
+  beforeEach(() => {
+    resetMocks();
+    saveApiKey('exa_test_api_key');
+  });
+
+  test('parseAgentColumns should create stable unique schema keys', () => {
+    const result = parseAgentColumns('Company Name, Website URL, Website URL, Source URLs');
+
+    expect(result.success).toBe(true);
+    expect(result.columns.map(column => column.key)).toEqual([
+      'company_name',
+      'website_url',
+      'website_url_2',
+      'source_urls'
+    ]);
+    expect(result.columns[3].type).toBe('array');
+  });
+
+  test('parseAgentColumns should allow blank columns for auto mode', () => {
+    const result = parseAgentColumns('');
+
+    expect(result.success).toBe(true);
+    expect(result.autoColumns).toBe(true);
+    expect(result.columns).toEqual([]);
+  });
+
+  test('parseAgentColumns should treat free-text columns as Agent guidance', () => {
+    const result = parseAgentColumns('company name website URL CEO founding date');
+
+    expect(result.success).toBe(true);
+    expect(result.autoColumns).toBe(true);
+    expect(result.columns).toEqual([]);
+    expect(result.columnInstructions).toBe('company name website URL CEO founding date');
+  });
+
+  test('parseAgentColumns should support non-comma explicit separators', () => {
+    const result = parseAgentColumns('company name\nwebsite URL;CEO|founding date');
+
+    expect(result.success).toBe(true);
+    expect(result.autoColumns).toBe(false);
+    expect(result.columns.map(column => column.key)).toEqual([
+      'company_name',
+      'website_url',
+      'ceo',
+      'founding_date'
+    ]);
+  });
+
+  test('buildAgentTableOutputSchema should create rows array schema', () => {
+    const columns = parseAgentColumns('name, website_url').columns;
+    const schema = buildAgentTableOutputSchema(columns, 10);
+
+    expect(schema.required).toEqual(['rows']);
+    expect(schema.properties.rows.maxItems).toBe(10);
+    expect(schema.properties.rows.items.required).toEqual(['name', 'website_url']);
+    expect(schema.properties.rows.items.properties.website_url.type).toBe('string');
+  });
+
+  test('buildAgentTableOutputSchema should create auto-column schema when no columns are supplied', () => {
+    const schema = buildAgentTableOutputSchema([], 25);
+
+    expect(schema.required).toEqual(['columns', 'rows']);
+    expect(schema.properties.columns.maxItems).toBeUndefined();
+    expect(schema.properties.rows.maxItems).toBe(25);
+    expect(schema.properties.rows.items.required).toEqual(['cells']);
+    expect(schema.properties.rows.items.additionalProperties).toBe(false);
+    expect(schema.properties.rows.items.properties.cells.maxItems).toBeUndefined();
+  });
+
+  test('inferAgentRowLimit should use counts from the prompt without exposing a rows field', () => {
+    expect(inferAgentRowLimit('Find top 50 AI companies')).toBe(50);
+    expect(inferAgentRowLimit('return 12 rows of startups')).toBe(12);
+    expect(inferAgentRowLimit('Find top 250 companies')).toBe(250);
+    expect(inferAgentRowLimit('Find top 1000 companies')).toBe(1000);
+    expect(inferAgentRowLimit('Find AI companies')).toBe(EXA_AGENT_CONFIG.defaultRows);
+  });
+
+  test('startAgentTableRun should call /agent/runs with auto-column table schema', () => {
+    const originalGetActiveSheet = SpreadsheetApp.getActiveSheet;
+    SpreadsheetApp.getActiveSheet = jest.fn(() => ({
+      getActiveRange: () => ({
+        getRow: () => 14,
+        getColumn: () => 12
+      })
+    }));
+
+    UrlFetchApp.fetch.mockReturnValue({
+      getResponseCode: () => 200,
+      getContentText: () => JSON.stringify({
+        id: 'agent_run_test',
+        object: 'agent_run',
+        status: 'running',
+        stopReason: null,
+        createdAt: '2026-06-18T00:00:00.000Z',
+        completedAt: null,
+        request: {},
+        output: { text: '', structured: null, grounding: [] },
+        usage: { searches: 0 },
+        costDollars: { total: 0 }
+      })
+    });
+
+    const result = startAgentTableRun({
+      prompt: 'Find 3 AI companies',
+      columns: '',
+      effort: 'auto'
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.run.id).toBe('agent_run_test');
+    expect(result.tableConfig.columns).toEqual([]);
+    expect(result.tableConfig.autoColumns).toBe(true);
+    expect(result.tableConfig.startCell).toBe('L14');
+
+    expect(UrlFetchApp.fetch).toHaveBeenCalledWith(
+      'https://api.exa.ai/agent/runs',
+      expect.objectContaining({
+        method: 'post',
+        contentType: 'application/json',
+        headers: expect.objectContaining({
+          'x-api-key': 'exa_test_api_key',
+          'x-exa-integration': 'exa-for-sheets'
+        })
+      })
+    );
+
+    const payload = JSON.parse(UrlFetchApp.fetch.mock.calls[0][1].payload);
+    expect(payload.effort).toBe('auto');
+    expect(payload.outputSchema.required).toEqual(['columns', 'rows']);
+    expect(payload.outputSchema.properties.rows.maxItems).toBe(3);
+    expect(payload.query).toContain('Create a spreadsheet-ready table');
+    expect(payload.query).toContain('Return no more than 3 rows');
+    expect(payload.query).toContain('Use web research. Do not rely on memory.');
+    expect(payload.query).toContain('Every row must be a real, source-verifiable entity');
+    expect(payload.query).toContain('Try to fill the table as completely as public sources allow');
+    expect(payload.query).toContain('Do not return notes, summaries, metadata');
+    expect(payload.query).toContain('Infer the best concise column headers');
+    expect(payload.metadata.startCell).toBe('L14');
+
+    SpreadsheetApp.getActiveSheet = originalGetActiveSheet;
+  });
+
+  test('startAgentTableRun should use custom start cell when provided', () => {
+    const originalGetActiveSheet = SpreadsheetApp.getActiveSheet;
+    SpreadsheetApp.getActiveSheet = jest.fn(() => ({
+      getActiveRange: () => ({
+        getRow: () => 14,
+        getColumn: () => 12
+      })
+    }));
+
+    UrlFetchApp.fetch.mockReturnValue({
+      getResponseCode: () => 200,
+      getContentText: () => JSON.stringify({
+        id: 'agent_run_test',
+        object: 'agent_run',
+        status: 'running',
+        output: { text: '', structured: null, grounding: [] },
+        usage: { searches: 0 },
+        costDollars: { total: 0 }
+      })
+    });
+
+    const result = startAgentTableRun({
+      prompt: 'Find 3 AI companies',
+      columns: '',
+      effort: 'auto',
+      startCell: ' b7 '
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.tableConfig.startCell).toBe('B7');
+
+    const payload = JSON.parse(UrlFetchApp.fetch.mock.calls[0][1].payload);
+    expect(payload.metadata.startCell).toBe('B7');
+
+    SpreadsheetApp.getActiveSheet = originalGetActiveSheet;
+  });
+
+  test('startAgentTableRun should add free-text column guidance to prompt', () => {
+    UrlFetchApp.fetch.mockReturnValue({
+      getResponseCode: () => 200,
+      getContentText: () => JSON.stringify({
+        id: 'agent_run_test',
+        object: 'agent_run',
+        status: 'running',
+        output: { text: '', structured: null, grounding: [] },
+        usage: { searches: 0 },
+        costDollars: { total: 0 }
+      })
+    });
+
+    const result = startAgentTableRun({
+      prompt: 'Find top 20 AI companies',
+      columns: 'company name website URL CEO founding date',
+      effort: 'auto'
+    });
+
+    expect(result.success).toBe(true);
+
+    const payload = JSON.parse(UrlFetchApp.fetch.mock.calls[0][1].payload);
+    expect(payload.outputSchema.required).toEqual(['columns', 'rows']);
+    expect(payload.query).toContain('Use these exact columns if possible: company name website URL CEO founding date');
+    expect(payload.metadata.columnInstructions).toBe('company name website URL CEO founding date');
+  });
+
+  test('getAgentRunStatus should fetch and summarize an Agent run', () => {
+    UrlFetchApp.fetch.mockReturnValue({
+      getResponseCode: () => 200,
+      getContentText: () => JSON.stringify({
+        id: 'agent_run_test',
+        object: 'agent_run',
+        status: 'completed',
+        stopReason: 'schema_satisfied',
+        createdAt: '2026-06-18T00:00:00.000Z',
+        completedAt: '2026-06-18T00:00:10.000Z',
+        request: {},
+        output: {
+          text: 'Done',
+          structured: { rows: [{ name: 'Exa' }, { name: 'Perplexity' }] },
+          grounding: []
+        },
+        usage: { searches: 3 },
+        costDollars: { total: 0.012 }
+      })
+    });
+
+    const result = getAgentRunStatus('agent_run_test');
+
+    expect(result.success).toBe(true);
+    expect(result.run.status).toBe('completed');
+    expect(result.run.rowCount).toBe(2);
+    expect(UrlFetchApp.fetch).toHaveBeenCalledWith(
+      'https://api.exa.ai/agent/runs/agent_run_test',
+      expect.objectContaining({
+        method: 'get',
+        headers: expect.objectContaining({
+          'Exa-Beta': 'agent-2026-05-07'
+        })
+      })
+    );
+  });
+
+  test('getAgentRunStatus should keep polling on Agent rate limits', () => {
+    UrlFetchApp.fetch.mockReturnValue({
+      getResponseCode: () => 429,
+      getContentText: () => JSON.stringify({ error: 'rate limited' }),
+      getHeaders: () => ({ 'Retry-After': '12' })
+    });
+
+    const result = getAgentRunStatus('agent_run_test');
+
+    expect(result.success).toBe(false);
+    expect(result.retryable).toBe(true);
+    expect(result.retryAfterMs).toBe(12000);
+    expect(result.message).toContain('rate limited');
+    expect(Utilities.sleep).not.toHaveBeenCalled();
+  });
+
+  test('cancelAgentRun should call the cancel endpoint', () => {
+    UrlFetchApp.fetch.mockReturnValue({
+      getResponseCode: () => 200,
+      getContentText: () => JSON.stringify({
+        id: 'agent_run_test',
+        object: 'agent_run',
+        status: 'cancelled',
+        stopReason: 'cancelled',
+        createdAt: '2026-06-18T00:00:00.000Z',
+        completedAt: '2026-06-18T00:00:05.000Z',
+        request: {},
+        output: { text: '', structured: null, grounding: [] },
+        usage: { searches: 0 },
+        costDollars: { total: 0 }
+      })
+    });
+
+    const result = cancelAgentRun('agent_run_test');
+
+    expect(result.success).toBe(true);
+    expect(result.run.status).toBe('cancelled');
+    expect(UrlFetchApp.fetch).toHaveBeenCalledWith(
+      'https://api.exa.ai/agent/runs/agent_run_test/cancel',
+      expect.objectContaining({
+        method: 'post',
+        headers: expect.objectContaining({
+          'Exa-Beta': 'agent-2026-05-07'
+        })
+      })
+    );
+  });
+
+  test('buildAgentSheetValues should flatten rows and append grounding sources', () => {
+    const columns = parseAgentColumns('name, website_url, reason').columns;
+    const run = {
+      id: 'agent_run_test',
+      status: 'completed',
+      output: {
+        structured: {
+          rows: [
+            { name: 'Perplexity AI', website_url: 'https://www.perplexity.ai/', reason: 'AI answer engine' },
+            { name: 'Brave Search', website_url: 'https://brave.com/search/', reason: 'Independent AI search' }
+          ]
+        },
+        grounding: [
+          {
+            field: 'structured.rows[0].reason',
+            citations: [{ url: 'https://www.perplexity.ai/', title: 'Perplexity' }]
+          },
+          {
+            field: 'structured.rows[1].website_url',
+            citations: [{ url: 'https://brave.com/search/', title: 'Brave Search' }]
+          }
+        ]
+      }
+    };
+
+    const result = buildAgentSheetValues(run, { rootKey: 'rows', columns }, true, true);
+
+    expect(result.success).toBe(true);
+    expect(result.values).toEqual([
+      ['name', 'website_url', 'reason', 'Sources'],
+      ['Perplexity AI', 'https://www.perplexity.ai/', 'AI answer engine', 'https://www.perplexity.ai/'],
+      ['Brave Search', 'https://brave.com/search/', 'Independent AI search', 'https://brave.com/search/']
+    ]);
+  });
+
+  test('buildAgentSheetValues should match custom columns by display label variations', () => {
+    const columns = parseAgentColumns('Company Name, Website URL, CEO').columns;
+    const run = {
+      id: 'agent_run_test',
+      status: 'completed',
+      output: {
+        structured: {
+          rows: [
+            { 'Company Name': 'Exa', 'Website URL': 'https://exa.ai', CEO: 'Will Bryk' }
+          ]
+        },
+        grounding: []
+      }
+    };
+
+    const result = buildAgentSheetValues(run, { rootKey: 'rows', columns }, true, false);
+
+    expect(result.success).toBe(true);
+    expect(result.values).toEqual([
+      ['Company Name', 'Website URL', 'CEO'],
+      ['Exa', 'https://exa.ai', 'Will Bryk']
+    ]);
+  });
+
+  test('buildAgentSheetValues should use generated columns from auto mode', () => {
+    const run = {
+      id: 'agent_run_test',
+      status: 'completed',
+      output: {
+        structured: {
+          columns: ['Company Name', 'Website URL', 'CEO'],
+          rows: [
+            { 'Company Name': 'Exa', 'Website URL': 'https://exa.ai', CEO: 'Will Bryk' },
+            { company_name: 'OpenAI', website_url: 'https://openai.com', ceo: 'Sam Altman' }
+          ]
+        },
+        grounding: []
+      }
+    };
+
+    const result = buildAgentSheetValues(run, { rootKey: 'rows', columns: [] }, true, false);
+
+    expect(result.success).toBe(true);
+    expect(result.values).toEqual([
+      ['Company Name', 'Website URL', 'CEO'],
+      ['Exa', 'https://exa.ai', 'Will Bryk'],
+      ['OpenAI', 'https://openai.com', 'Sam Altman']
+    ]);
+  });
+
+  test('buildAgentSheetValues should support generated columns with cells arrays', () => {
+    const run = {
+      id: 'agent_run_test',
+      status: 'completed',
+      output: {
+        structured: {
+          columns: ['Company Name', 'Website URL', 'CEO'],
+          rows: [
+            { cells: ['Exa', 'https://exa.ai', 'Will Bryk'] },
+            ['OpenAI', 'https://openai.com', 'Sam Altman']
+          ]
+        },
+        grounding: []
+      }
+    };
+
+    const result = buildAgentSheetValues(run, { rootKey: 'rows', columns: [] }, true, false);
+
+    expect(result.success).toBe(true);
+    expect(result.values).toEqual([
+      ['Company Name', 'Website URL', 'CEO'],
+      ['Exa', 'https://exa.ai', 'Will Bryk'],
+      ['OpenAI', 'https://openai.com', 'Sam Altman']
+    ]);
+  });
+
+  test('buildAgentSheetValues should reject headers-only auto output', () => {
+    const run = {
+      id: 'agent_run_test',
+      status: 'completed',
+      output: {
+        structured: {
+          columns: ['Company Name', 'Website URL'],
+          rows: [{}]
+        },
+        grounding: []
+      }
+    };
+
+    const result = buildAgentSheetValues(run, { rootKey: 'rows', columns: [] }, true, false);
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('no usable data rows');
+  });
+
+  test('isValidAgentStartCell should accept only simple single cells', () => {
+    expect(normalizeAgentStartCell(' d5 ')).toBe('D5');
+    expect(isValidAgentStartCell('A1')).toBe(true);
+    expect(isValidAgentStartCell('D5')).toBe(true);
+    expect(isValidAgentStartCell('A1:B2')).toBe(false);
+    expect(isValidAgentStartCell('Sheet1!A1')).toBe(false);
+    expect(isValidAgentStartCell('1A')).toBe(false);
+  });
+
+  test('writeAgentRunToSheet should reject invalid custom start cell', () => {
+    UrlFetchApp.fetch.mockReturnValue({
+      getResponseCode: () => 200,
+      getContentText: () => JSON.stringify({
+        id: 'agent_run_test',
+        object: 'agent_run',
+        status: 'completed',
+        output: {
+          structured: {
+            columns: ['Company Name'],
+            rows: [{ cells: ['Exa'] }]
+          },
+          grounding: []
+        },
+        usage: { searches: 1 },
+        costDollars: { total: 0.01 }
+      })
+    });
+
+    const result = writeAgentRunToSheet(
+      'agent_run_test',
+      { rootKey: 'rows', columns: [], autoColumns: true },
+      { includeHeaders: true, includeSources: false, startCell: 'A1:B2' }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('Start cell');
+  });
+
+  test('writeAgentRunToSheet should use saved start cell from run start', () => {
+    UrlFetchApp.fetch.mockReturnValue({
+      getResponseCode: () => 200,
+      getContentText: () => JSON.stringify({
+        id: 'agent_run_test',
+        object: 'agent_run',
+        status: 'completed',
+        output: {
+          structured: {
+            columns: ['Company Name'],
+            rows: [{ cells: ['Exa'] }]
+          },
+          grounding: []
+        },
+        usage: { searches: 1 },
+        costDollars: { total: 0.01 }
+      })
+    });
+
+    const originalGetActiveSheet = SpreadsheetApp.getActiveSheet;
+    const setValues = jest.fn();
+    const getRange = jest.fn((arg1, arg2, arg3, arg4) => {
+      if (typeof arg1 === 'string') {
+        return {
+          getRow: () => 5,
+          getColumn: () => 4
+        };
+      }
+
+      return {
+        getValues: () => Array.from({ length: arg3 }, () => Array(arg4).fill('')),
+        setValues,
+        setFontWeight: jest.fn(),
+        setBackground: jest.fn()
+      };
+    });
+
+    SpreadsheetApp.getActiveSheet = jest.fn(() => ({
+      getActiveRange: () => ({
+        getRow: () => 20,
+        getColumn: () => 20
+      }),
+      getRange,
+      getMaxRows: () => 1000,
+      getMaxColumns: () => 26,
+      autoResizeColumns: jest.fn()
+    }));
+
+    const result = writeAgentRunToSheet(
+      'agent_run_test',
+      { rootKey: 'rows', columns: [], autoColumns: true, startCell: 'D5' },
+      { includeHeaders: true, includeSources: false, startCell: '' }
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.message).toContain('D5');
+    expect(getRange.mock.calls[0]).toEqual(['D5']);
+    expect(getRange.mock.calls[1]).toEqual([5, 4, 2, 1]);
+    expect(setValues).toHaveBeenCalledWith([
+      ['Company Name'],
+      ['Exa']
+    ]);
+
+    SpreadsheetApp.getActiveSheet = originalGetActiveSheet;
+  });
+});
+
 describe('Rate Limiting', () => {
   beforeEach(() => {
     resetMocks();

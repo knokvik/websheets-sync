@@ -5,6 +5,14 @@ var RATE_LIMIT_CONFIG = {
   maxDelayMs: 10000
 };
 
+var EXA_AGENT_CONFIG = {
+  endpoint: "https://api.exa.ai/agent/runs",
+  betaHeader: "agent-2026-05-07",
+  defaultRows: 50
+};
+
+var EXA_AGENT_VALID_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'auto'];
+
 /**
  * Makes an HTTP request with exponential backoff retry on rate limit (429) errors.
  * @param {string} url The URL to fetch
@@ -14,36 +22,37 @@ var RATE_LIMIT_CONFIG = {
 function fetchWithRetry(url, options) {
   var lastError = null;
   var delay = RATE_LIMIT_CONFIG.initialDelayMs;
-  
+
   for (var attempt = 0; attempt <= RATE_LIMIT_CONFIG.maxRetries; attempt++) {
     var response = UrlFetchApp.fetch(url, options);
     var code = response.getResponseCode();
-    
+
     if (code !== 429) {
       return response;
     }
-    
+
     // Rate limited - check if we should retry
     if (attempt >= RATE_LIMIT_CONFIG.maxRetries) {
       return response; // Return the 429 response after max retries
     }
-    
-    // Check for Retry-After header
-    var retryAfter = response.getHeaders()['Retry-After'];
+
+    // Respect Retry-After when present, including HTTP-date values.
+    var headers = response.getHeaders ? response.getHeaders() : {};
+    var retryAfter = headers['Retry-After'] || headers['retry-after'];
     if (retryAfter) {
-      delay = parseInt(retryAfter, 10) * 1000;
+      delay = getRetryAfterMs(response);
     }
-    
-    // Cap the delay
+
+    // Cap the delay.
     delay = Math.min(delay, RATE_LIMIT_CONFIG.maxDelayMs);
-    
+
     Logger.log('Rate limited (429). Retrying in ' + delay + 'ms (attempt ' + (attempt + 1) + '/' + RATE_LIMIT_CONFIG.maxRetries + ')');
     Utilities.sleep(delay);
-    
+
     // Exponential backoff for next attempt
     delay = delay * 2;
   }
-  
+
   return response;
 }
 
@@ -65,17 +74,12 @@ function showSidebar() {
 function showAbout() {
   var ui = SpreadsheetApp.getUi();
   var message = 'Exa AI for Google Sheets\n\n' +
-                'Version: 2.0.3\n\n' +
-                'This add-on provides powerful AI-driven search and analysis capabilities using the Exa API.\n\n' +
-                'Key Features:\n' +
-                '- EXA_ANSWER: Generate AI answers from web searches\n' +
-                '- EXA_SEARCH: Perform web searches\n' +
-                '- EXA_CONTENTS: Extract content from URLs\n' +
-                '- EXA_FINDSIMILAR: Find similar web pages\n\n' +
-                'For detailed documentation and support, open the sidebar and navigate to the Docs tab.\n\n' +
-                'Visit https://exa.ai for more information about the Exa API.\n\n' +
-                'Visit https://github.com/exa-labs/exa-sheets the source code.';
-  
+                'Version: 2.0.5\n\n' +
+                'Use Exa Agent to fill a table from a prompt.\n\n' +
+                'Use the EXA formula inside a cell when you want one answer.\n\n' +
+                'Open the sidebar to add your API key and start using Exa.\n\n' +
+                'Learn more at https://exa.ai';
+
   ui.alert('About Exa AI', message, ui.ButtonSet.OK);
 }
 
@@ -88,7 +92,7 @@ function getAllApiKeys() {
   if (!keysJson) {
     return { keys: {}, activeKeyName: null };
   }
-  
+
   try {
     return JSON.parse(keysJson);
   } catch (e) {
@@ -114,8 +118,8 @@ function saveAllApiKeys(keysData) {
  * @return {Object} Structured error response
  */
 function fail(code, message, correlationId, details) {
-  return { 
-    success: false, 
+  return {
+    success: false,
     code: code,
     message: message,
     correlationId: correlationId,
@@ -131,7 +135,7 @@ function fail(code, message, correlationId, details) {
  */
 function saveApiKey(key, reqId) {
   const correlationId = reqId || Utilities.getUuid();
-  
+
   try {
     // Validate input
     if (!key || typeof key !== 'string' || !key.trim()) {
@@ -143,13 +147,13 @@ function saveApiKey(key, reqId) {
       }));
       return fail('VALIDATION_EMPTY_KEY', 'API key is required.', correlationId);
     }
-    
+
     // Use a default name since we're managing a single key
     const name = "default";
-    
+
     // Get all existing keys
     const keysData = getAllApiKeys();
-    
+
     // Add or update the key with metadata
     const now = new Date().toISOString();
     keysData.keys[name] = {
@@ -159,21 +163,21 @@ function saveApiKey(key, reqId) {
       // First few and last few characters for display, rest is masked with more dots
       displayKey: `${key.substring(0, 4)}${'.'.repeat(15)}${key.substring(key.length - 4)}`
     };
-    
+
     // Set as active key
     keysData.activeKeyName = name;
-    
+
     // Save back to properties with error handling
     try {
       saveAllApiKeys(keysData);
     } catch (e) {
       const errorMsg = String(e);
       const errorStack = e.stack || '';
-      
+
       // Detect specific storage errors
       let code = 'STORAGE_WRITE_FAILED';
       let userMessage = 'Failed to save API key. Please try again.';
-      
+
       if (errorMsg.includes('Service invoked too many times')) {
         code = 'STORAGE_RATE_LIMIT';
         userMessage = 'Too many requests. Please wait a moment and try again.';
@@ -181,7 +185,7 @@ function saveApiKey(key, reqId) {
         code = 'STORAGE_SIZE_EXCEEDED';
         userMessage = 'Storage limit exceeded. Please contact support.';
       }
-      
+
       console.error(JSON.stringify({
         correlationId: correlationId,
         where: 'saveApiKey',
@@ -189,21 +193,21 @@ function saveApiKey(key, reqId) {
         error: errorMsg,
         stack: errorStack
       }));
-      
+
       return fail(code, userMessage, correlationId);
     }
-    
-    return { 
-      success: true, 
+
+    return {
+      success: true,
       message: 'API key saved successfully.',
       correlationId: correlationId
     };
-    
+
   } catch (e) {
     // Catch any unexpected errors
     const errorMsg = String(e);
     const errorStack = e.stack || '';
-    
+
     console.error(JSON.stringify({
       correlationId: correlationId,
       where: 'saveApiKey',
@@ -211,7 +215,7 @@ function saveApiKey(key, reqId) {
       error: errorMsg,
       stack: errorStack
     }));
-    
+
     return fail('INTERNAL', 'Unexpected error while saving API key.', correlationId);
   }
 }
@@ -223,28 +227,28 @@ function saveApiKey(key, reqId) {
  */
 function deleteApiKey(name) {
   const keysData = getAllApiKeys();
-  
+
   if (!keysData.keys[name]) {
-    return { 
-      success: false, 
+    return {
+      success: false,
       message: `Key "${name}" not found.`
     };
   }
-  
+
   // Delete the key
   delete keysData.keys[name];
-  
+
   // If we deleted the active key, set a new active key or clear it
   if (keysData.activeKeyName === name) {
     const remainingKeys = Object.keys(keysData.keys);
     keysData.activeKeyName = remainingKeys.length > 0 ? remainingKeys[0] : null;
   }
-  
+
   // Save the changes
   saveAllApiKeys(keysData);
-  
-  return { 
-    success: true, 
+
+  return {
+    success: true,
     message: `Key "${name}" deleted successfully.`
   };
 }
@@ -256,25 +260,25 @@ function deleteApiKey(name) {
  */
 function setActiveApiKey(name) {
   const keysData = getAllApiKeys();
-  
+
   if (!keysData.keys[name]) {
-    return { 
-      success: false, 
+    return {
+      success: false,
       message: `Key "${name}" not found.`
     };
   }
-  
+
   // Set the active key
   keysData.activeKeyName = name;
-  
+
   // Update last used timestamp
   keysData.keys[name].lastUsed = new Date().toISOString();
-  
+
   // Save the changes
   saveAllApiKeys(keysData);
-  
-  return { 
-    success: true, 
+
+  return {
+    success: true,
     message: `Key "${name}" is now active.`
   };
 }
@@ -285,15 +289,15 @@ function setActiveApiKey(name) {
  */
 function getApiKey() {
   const keysData = getAllApiKeys();
-  
+
   if (!keysData.activeKeyName || !keysData.keys[keysData.activeKeyName]) {
     return null;
   }
-  
+
   // Update last used timestamp
   keysData.keys[keysData.activeKeyName].lastUsed = new Date().toISOString();
   saveAllApiKeys(keysData);
-  
+
   return keysData.keys[keysData.activeKeyName].key;
 }
 
@@ -303,11 +307,11 @@ function getApiKey() {
  */
 function getActiveKeyInfo() {
   const keysData = getAllApiKeys();
-  
+
   if (!keysData.activeKeyName || !keysData.keys[keysData.activeKeyName]) {
     return null;
   }
-  
+
   const activeKey = keysData.keys[keysData.activeKeyName];
   return {
     name: keysData.activeKeyName,
@@ -327,7 +331,7 @@ function getAllApiKeysForUI() {
     keys: {},
     activeKey: null
   };
-  
+
   // Process each key to create the UI representation
   if (keysData && keysData.keys) {
     Object.entries(keysData.keys).forEach(([name, keyData]) => {
@@ -338,7 +342,7 @@ function getAllApiKeysForUI() {
       };
     });
   }
-  
+
   // Set the active key info
   if (keysData.activeKeyName && keysData.keys[keysData.activeKeyName]) {
     const activeKey = keysData.keys[keysData.activeKeyName];
@@ -349,7 +353,7 @@ function getAllApiKeysForUI() {
       lastUsed: activeKey.lastUsed
     };
   }
-  
+
   return result;
 }
 
@@ -361,9 +365,9 @@ function getAllApiKeysForUI() {
 function removeApiKey() {
   // Clear all keys
   PropertiesService.getUserProperties().deleteProperty('EXA_API_KEYS');
-  
-  return { 
-    success: true, 
+
+  return {
+    success: true,
     message: 'API key removed successfully.'
   };
 }
@@ -374,11 +378,11 @@ function removeApiKey() {
  */
 function getApiKeyForUI() {
   const keysData = getAllApiKeys();
-  
+
   if (!keysData.activeKeyName || !keysData.keys[keysData.activeKeyName]) {
     return null;
   }
-  
+
   const activeKey = keysData.keys[keysData.activeKeyName];
   return {
     displayKey: activeKey.displayKey,
@@ -401,7 +405,7 @@ function ensureAuthorized() {
  * Simple AI-powered data enrichment using Exa. This is the recommended function for most use cases.
  * Just describe what information you want about the data in the referenced cell.
  * Uses /search with outputSchema for structured text output.
- * 
+ *
  * Examples:
  *   =EXA("Return only the company website URL", A1)
  *   =EXA("Return only the company headcount", A1)
@@ -516,7 +520,7 @@ function EXA_ANSWER(prompt, prefix, suffix, includeCitations, systemPrompt, outp
   const finalPrompt = `${prefix || ''} ${prompt} ${suffix || ''}`.trim();
   const shouldShowFullAnswerWithCitations = includeCitations === true;
   const hasSystemPrompt = typeof systemPrompt === 'string' && systemPrompt.trim() !== '';
-  
+
   // Parse outputSchema if provided
   let parsedSchema = null;
   if (typeof outputSchema === 'string' && outputSchema.trim() !== '') {
@@ -537,7 +541,7 @@ function EXA_ANSWER(prompt, prefix, suffix, includeCitations, systemPrompt, outp
   try {
     let response;
     const useChatCompletions = hasSystemPrompt || parsedSchema;
-    
+
     if (useChatCompletions) {
       // Use chat completions endpoint for systemPrompt OR outputSchema (OpenAI-compatible format)
       const messages = [];
@@ -545,7 +549,7 @@ function EXA_ANSWER(prompt, prefix, suffix, includeCitations, systemPrompt, outp
         messages.push({ role: "system", content: systemPrompt.trim() });
       }
       messages.push({ role: "user", content: finalPrompt });
-      
+
       const chatPayload = { model: "exa", messages: messages };
       const extraBody = {};
       if (parsedSchema) {
@@ -557,7 +561,7 @@ function EXA_ANSWER(prompt, prefix, suffix, includeCitations, systemPrompt, outp
       if (Object.keys(extraBody).length > 0) {
         chatPayload.extraBody = extraBody;
       }
-      
+
       response = fetchWithRetry("https://api.exa.ai/chat/completions", {
         method: "post",
         contentType: "application/json",
@@ -586,23 +590,23 @@ function EXA_ANSWER(prompt, prefix, suffix, includeCitations, systemPrompt, outp
     // --- Response Handling ---
     if (responseCode === 200) {
       const result = JSON.parse(responseBody);
-      
+
       let fullAnswerFromApi;
       let citations = [];
-      
+
       if (useChatCompletions) {
         // Chat completions response format (for systemPrompt and/or outputSchema)
         // Response is always in choices[0].message.content format
-        
+
         if (result.choices && result.choices[0] && result.choices[0].message) {
           const messageContent = result.choices[0].message.content;
           citations = result.choices[0].message.citations || [];
-          
+
           if (parsedSchema) {
             // With outputSchema: content is a JSON string that needs to be parsed
             try {
               const answerObj = JSON.parse(messageContent);
-              
+
               if (typeof answerObj === 'object' && answerObj !== null) {
                 if (returnRawJson === true) {
                   fullAnswerFromApi = JSON.stringify(answerObj, null, 2);
@@ -632,7 +636,7 @@ function EXA_ANSWER(prompt, prefix, suffix, includeCitations, systemPrompt, outp
       } else {
         // /answer endpoint response format (no systemPrompt, no outputSchema)
         citations = result.citations || [];
-        
+
         if (result && typeof result.answer === 'string') {
           fullAnswerFromApi = result.answer;
         } else {
@@ -644,17 +648,17 @@ function EXA_ANSWER(prompt, prefix, suffix, includeCitations, systemPrompt, outp
 
       // Regex to match inline citations like " ([Source](URL))" or " ([Source](URL), [Source2](URL2))"
       const inlineCitationRegex = /\s*\(\[([^\]]+)\]\(([^\)]+)\)(?:,\s*\[([^\]]+)\]\(([^\)]+)\))*\)/g;
-      
+
       // Always strip inline citations from the answer text for cleaner output
       const cleanAnswer = fullAnswerFromApi.replace(inlineCitationRegex, '').trim();
-      
+
       if (!shouldShowFullAnswerWithCitations) {
         finalOutput = cleanAnswer || fullAnswerFromApi.trim();
       } else {
         finalOutput = cleanAnswer || fullAnswerFromApi.trim();
-        
+
         const allCitations = [];
-        
+
         if (Array.isArray(citations) && citations.length > 0) {
           citations.forEach(citation => {
             const title = citation.title || 'Source';
@@ -664,7 +668,7 @@ function EXA_ANSWER(prompt, prefix, suffix, includeCitations, systemPrompt, outp
             }
           });
         }
-        
+
         if (allCitations.length > 0) {
           finalOutput += '\n\nSources:\n' + allCitations.map((c, i) => `${i + 1}. ${c}`).join('\n');
         }
@@ -905,8 +909,8 @@ function EXA_SEARCH(query, numResults, searchType, prefix, suffix, includeDomain
 
   // Validate category if provided
   const validCategories = ['company', 'research paper', 'news', 'github', 'personal site', 'pdf', 'financial report', 'people'];
-  const categoryValue = (typeof category === 'string' && category.trim() !== '' && validCategories.includes(category.toLowerCase())) 
-    ? category.toLowerCase() 
+  const categoryValue = (typeof category === 'string' && category.trim() !== '' && validCategories.includes(category.toLowerCase()))
+    ? category.toLowerCase()
     : null;
 
   // Build payload
@@ -987,10 +991,1045 @@ function EXA_SEARCH(query, numResults, searchType, prefix, suffix, includeDomain
 }
 
 /**
+ * Normalizes a user-facing column label into a stable JSON property key.
+ * @param {string} label The column label typed in the sidebar
+ * @param {Object} usedKeys Set-like object of previously used keys
+ * @return {string} A unique, schema-safe property key
+ */
+function normalizeAgentColumnKey(label, usedKeys) {
+  var key = String(label || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+  if (!key) {
+    key = 'field';
+  }
+
+  var baseKey = key;
+  var suffix = 2;
+  while (usedKeys[key]) {
+    key = baseKey + '_' + suffix;
+    suffix++;
+  }
+
+  usedKeys[key] = true;
+  return key;
+}
+
+/**
+ * Converts a schema key back into a readable label when no label was supplied.
+ * @param {string} key The schema key
+ * @return {string} Human-readable label
+ */
+function humanizeAgentColumnLabel(key) {
+  return String(key || '')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, function(ch) { return ch.toUpperCase(); });
+}
+
+/**
+ * Parses a sidebar column list into labels and schema keys.
+ * Commas, semicolons, pipes, tabs, and new lines are treated as exact separators.
+ * Plain text without separators is passed to the Agent as column guidance.
+ * @param {string} columnsText Column text from the sidebar
+ * @return {Object} Parse result with success flag and columns
+ */
+function parseAgentColumns(columnsText) {
+  var rawText = (typeof columnsText === 'string' && columnsText.trim())
+    ? columnsText.trim()
+    : '';
+
+  if (!rawText) {
+    return { success: true, columns: [], autoColumns: true, columnInstructions: '' };
+  }
+
+  var hasExplicitSeparators = /[,;\n\t|]/.test(rawText);
+  if (!hasExplicitSeparators) {
+    return {
+      success: true,
+      columns: [],
+      autoColumns: true,
+      columnInstructions: rawText
+    };
+  }
+
+  var labels = rawText
+    .split(/[,;\n\t|]+/)
+    .map(function(label) { return label.trim(); })
+    .filter(function(label) { return label.length > 0; });
+
+  if (labels.length === 0) {
+    return { success: true, columns: [], autoColumns: true, columnInstructions: '' };
+  }
+
+  var usedKeys = {};
+  var columns = labels.map(function(label) {
+    var key = normalizeAgentColumnKey(label, usedKeys);
+    var isUrlList = key === 'source_urls' || key === 'sources' || key === 'urls' || key.match(/_urls$/);
+    return {
+      label: label,
+      key: key,
+      type: isUrlList ? 'array' : 'string'
+    };
+  });
+
+  return { success: true, columns: columns, autoColumns: false, columnInstructions: rawText };
+}
+
+/**
+ * Builds the JSON schema sent to /agent/runs for a spreadsheet table.
+ * @param {Object[]} columns Parsed column definitions
+ * @param {number} rowLimit Maximum number of rows to request
+ * @return {Object} JSON schema
+ */
+function buildAgentTableOutputSchema(columns, rowLimit) {
+  if (!columns || columns.length === 0) {
+    return {
+      type: 'object',
+      required: ['columns', 'rows'],
+      additionalProperties: false,
+      properties: {
+        columns: {
+          type: 'array',
+          description: 'Spreadsheet column headers inferred from the user request, in display order.',
+          minItems: 1,
+          items: { type: 'string' }
+        },
+        rows: {
+          type: 'array',
+          description: 'Spreadsheet rows. Each row has cells in the same order as the columns array.',
+          minItems: 1,
+          maxItems: rowLimit,
+          items: {
+            type: 'object',
+            required: ['cells'],
+            additionalProperties: false,
+            properties: {
+              cells: {
+                type: 'array',
+                description: 'Cell values for this row, in the exact same order as the columns array.',
+                minItems: 1,
+                items: { type: 'string' }
+              }
+            }
+          }
+        }
+      }
+    };
+  }
+
+  var properties = {};
+  var required = [];
+
+  columns.forEach(function(column) {
+    required.push(column.key);
+    if (column.type === 'array') {
+      properties[column.key] = {
+        type: 'array',
+        description: 'Values for the "' + column.label + '" column.',
+        items: { type: 'string' }
+      };
+    } else {
+      properties[column.key] = {
+        type: 'string',
+        description: 'Value for the "' + column.label + '" column.'
+      };
+    }
+  });
+
+  return {
+    type: 'object',
+    required: ['rows'],
+    additionalProperties: false,
+    properties: {
+      rows: {
+        type: 'array',
+        description: 'Spreadsheet rows matching the requested table.',
+        minItems: 1,
+        maxItems: rowLimit,
+        items: {
+          type: 'object',
+          required: required,
+          additionalProperties: false,
+          properties: properties
+        }
+      }
+    }
+  };
+}
+
+/**
+ * Builds a clear table-oriented Agent prompt while preserving the user's ask.
+ * @param {string} prompt User prompt
+ * @param {Object[]} columns Parsed columns
+ * @param {number} rowLimit Maximum number of rows
+ * @param {string} columnInstructions Optional free-text column guidance
+ * @return {string} Prompt for Exa Agent
+ */
+function buildAgentTablePrompt(prompt, columns, rowLimit, columnInstructions) {
+  var basePrompt = String(prompt || '').trim() + '\n\n' +
+    'Create a spreadsheet-ready table. Return no more than ' + rowLimit + ' rows. ' +
+    'Use the row count requested by the user when it is within that limit. ' +
+    'If the user did not request a count, return the most useful set of rows up to that limit. ' +
+    'Use web research. Do not rely on memory. ' +
+    'Every row must be a real, source-verifiable entity that matches the request. ' +
+    'Do not pad the table with weak matches or duplicates just to reach the row count. ' +
+    'Try to fill the table as completely as public sources allow, but use empty strings for unknown values rather than inventing facts. ' +
+    'Prefer official, primary, or otherwise high-quality sources when possible. ' +
+    'Do not return notes, summaries, metadata, or separate partial-results arrays unless the user explicitly asks for them.';
+
+  if (!columns || columns.length === 0) {
+    var columnGuidance = columnInstructions
+      ? ' Use these exact columns if possible: ' + columnInstructions + '.'
+      : ' Infer the best concise column headers from the user request.';
+    return basePrompt + columnGuidance + ' ' +
+      'Return a columns array and rows where each row is an object with a cells array. ' +
+      'Each cells array must contain values in the exact same order as the columns array. ' +
+      'Do not return empty row objects.';
+  }
+
+  var columnList = columns.map(function(column) {
+    return column.label + ' (schema key: ' + column.key + ')';
+  }).join(', ');
+
+  return basePrompt + ' Populate exactly these columns: ' + columnList + '.';
+}
+
+/**
+ * Validates and normalizes the Agent effort setting.
+ * @param {string} effort User-selected effort
+ * @return {string} Valid effort
+ */
+function normalizeAgentEffort(effort) {
+  var value = (typeof effort === 'string' && effort.trim()) ? effort.trim().toLowerCase() : 'auto';
+  return EXA_AGENT_VALID_EFFORTS.includes(value) ? value : 'auto';
+}
+
+/**
+ * Infers a useful row count from prompts like "top 50", "10 companies", or "return 25 rows".
+ * @param {string} prompt User prompt
+ * @param {*} explicitRowLimit Optional hidden/configured row count
+ * @return {number} Requested row count or the default
+ */
+function inferAgentRowLimit(prompt, explicitRowLimit) {
+  var configured = parseInt(explicitRowLimit, 10);
+  if (configured && configured > 0) {
+    return configured;
+  }
+
+  var text = String(prompt || '').toLowerCase();
+  var patterns = [
+    /\btop\s+(\d+)\b/,
+    /\bfirst\s+(\d+)\b/,
+    /\b(\d+)\s+(?:rows?|companies|items|people|startups|leads|results|entries)\b/,
+    /\b(?:return|find|list|give me)\s+(\d+)\b/
+  ];
+
+  for (var i = 0; i < patterns.length; i++) {
+    var match = text.match(patterns[i]);
+    if (match) {
+      var inferred = parseInt(match[1], 10);
+      if (inferred && inferred > 0) {
+        return inferred;
+      }
+    }
+  }
+
+  return EXA_AGENT_CONFIG.defaultRows;
+}
+
+/**
+ * Starts an Exa Agent run designed to produce a spreadsheet table.
+ * Called from the sidebar.
+ *
+ * @param {Object} config Sidebar options
+ * @return {Object} Result with run summary and table config
+ */
+function startAgentTableRun(config) {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    return {
+      success: false,
+      message: 'No API key set. Please set your API key in the Exa AI sidebar.'
+    };
+  }
+
+  config = config || {};
+  var prompt = (typeof config.prompt === 'string') ? config.prompt.trim() : '';
+  if (!prompt) {
+    return { success: false, message: 'Please enter an Agent prompt.' };
+  }
+
+  var rowLimit = inferAgentRowLimit(prompt, config.rowLimit);
+
+  var parsedColumns = parseAgentColumns(config.columns);
+  if (!parsedColumns.success) {
+    return parsedColumns;
+  }
+
+  var columns = parsedColumns.columns;
+  var autoColumns = parsedColumns.autoColumns === true;
+  var effort = normalizeAgentEffort(config.effort);
+  var requestedStartCell = normalizeAgentStartCell(config.startCell);
+  if (requestedStartCell && !isValidAgentStartCell(requestedStartCell)) {
+    return {
+      success: false,
+      message: 'Start cell must be a single cell like A1 or D5.'
+    };
+  }
+  var startCell = requestedStartCell || getCurrentAgentStartCell();
+  var outputSchema = buildAgentTableOutputSchema(columns, rowLimit);
+
+  var payload = {
+    query: buildAgentTablePrompt(prompt, columns, rowLimit, parsedColumns.columnInstructions || ''),
+    systemPrompt: 'You are filling a Google Sheets table. Return precise, concise cell values and satisfy the provided JSON schema.',
+    outputSchema: outputSchema,
+    effort: effort,
+    metadata: {
+      integration: 'exa-for-sheets',
+      mode: 'agent-table',
+      rowLimit: String(rowLimit),
+      columns: columns.map(function(column) { return column.key; }).join(','),
+      autoColumns: String(autoColumns),
+      columnInstructions: parsedColumns.columnInstructions || '',
+      startCell: startCell
+    }
+  };
+
+  try {
+    var response = fetchWithRetry(EXA_AGENT_CONFIG.endpoint, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      headers: {
+        'x-api-key': apiKey,
+        'Exa-Beta': EXA_AGENT_CONFIG.betaHeader,
+        'x-exa-integration': 'exa-for-sheets',
+        'User-Agent': 'exa-for-sheets 2.0'
+      },
+      muteHttpExceptions: true
+    });
+
+    var responseCode = response.getResponseCode();
+    var responseBody = response.getContentText();
+
+    if (responseCode === 200) {
+      var run = JSON.parse(responseBody);
+      return {
+        success: true,
+        message: 'Agent run started.',
+        run: summarizeAgentRun(run),
+        tableConfig: {
+          rootKey: 'rows',
+          columns: columns,
+          rowLimit: rowLimit,
+          autoColumns: autoColumns,
+          startCell: startCell
+        }
+      };
+    }
+
+    return {
+      success: false,
+      message: parseAgentApiError(responseCode, responseBody, 'Failed to start Agent run.')
+    };
+  } catch (e) {
+    Logger.log('startAgentTableRun Error: ' + e);
+    return { success: false, message: 'Script Error: ' + e.message };
+  }
+}
+
+/**
+ * Gets the current status of an Agent run.
+ * @param {string} runId Exa Agent run ID
+ * @return {Object} Run status result
+ */
+function getAgentRunStatus(runId) {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    return { success: false, message: 'No API key set.' };
+  }
+
+  var fetched = fetchAgentRun(apiKey, runId);
+  if (!fetched.success) {
+    return fetched;
+  }
+
+  return {
+    success: true,
+    run: summarizeAgentRun(fetched.run)
+  };
+}
+
+/**
+ * Cancels a queued or running Agent run.
+ * @param {string} runId Exa Agent run ID
+ * @return {Object} Cancel result
+ */
+function cancelAgentRun(runId) {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    return { success: false, message: 'No API key set.' };
+  }
+
+  if (!isValidAgentRunId(runId)) {
+    return { success: false, message: 'Invalid Agent run ID.' };
+  }
+
+  try {
+    var response = fetchWithRetry(EXA_AGENT_CONFIG.endpoint + '/' + encodeURIComponent(runId) + '/cancel', {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify({}),
+      headers: {
+        'x-api-key': apiKey,
+        'Exa-Beta': EXA_AGENT_CONFIG.betaHeader,
+        'x-exa-integration': 'exa-for-sheets',
+        'User-Agent': 'exa-for-sheets 2.0'
+      },
+      muteHttpExceptions: true
+    });
+
+    var responseCode = response.getResponseCode();
+    var responseBody = response.getContentText();
+
+    if (responseCode === 200) {
+      return {
+        success: true,
+        message: 'Agent run cancelled.',
+        run: summarizeAgentRun(JSON.parse(responseBody))
+      };
+    }
+
+    return {
+      success: false,
+      message: parseAgentApiError(responseCode, responseBody, 'Failed to cancel Agent run.')
+    };
+  } catch (e) {
+    Logger.log('cancelAgentRun Error: ' + e);
+    return { success: false, message: 'Script Error: ' + e.message };
+  }
+}
+
+/**
+ * Writes a completed Agent run's structured output into the active sheet.
+ * @param {string} runId Exa Agent run ID
+ * @param {Object} tableConfig Returned from startAgentTableRun
+ * @param {Object} writeOptions includeHeaders, includeSources, overwrite
+ * @return {Object} Write result
+ */
+function writeAgentRunToSheet(runId, tableConfig, writeOptions) {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    return { success: false, message: 'No API key set.' };
+  }
+
+  var fetched = fetchAgentRun(apiKey, runId);
+  if (!fetched.success) {
+    return fetched;
+  }
+
+  var run = fetched.run;
+  if (run.status !== 'completed') {
+    return {
+      success: false,
+      message: 'Agent run is not complete yet. Current status: ' + run.status
+    };
+  }
+
+  writeOptions = writeOptions || {};
+  var tableResult = buildAgentSheetValues(
+    run,
+    tableConfig || {},
+    writeOptions.includeHeaders !== false,
+    writeOptions.includeSources === true
+  );
+
+  if (!tableResult.success) {
+    return tableResult;
+  }
+
+  try {
+    var sheet = SpreadsheetApp.getActiveSheet();
+    var startRange = null;
+    var requestedStartCell = normalizeAgentStartCell(
+      tableConfig && tableConfig.startCell ? tableConfig.startCell : writeOptions.startCell
+    );
+    if (requestedStartCell) {
+      if (!isValidAgentStartCell(requestedStartCell)) {
+        return {
+          success: false,
+          message: 'Start cell must be a single cell like A1 or D5.'
+        };
+      }
+      startRange = sheet.getRange(requestedStartCell);
+    } else {
+      startRange = sheet.getActiveRange();
+    }
+    if (!startRange) {
+      startRange = sheet.getRange(1, 1);
+    }
+
+    var startRow = startRange.getRow();
+    var startCol = startRange.getColumn();
+    var values = tableResult.values;
+    var numRows = values.length;
+    var numCols = values[0].length;
+
+    ensureSheetSize(sheet, startRow + numRows - 1, startCol + numCols - 1);
+
+    var targetRange = sheet.getRange(startRow, startCol, numRows, numCols);
+    if (writeOptions.overwrite !== true) {
+      var existing = targetRange.getValues();
+      var occupiedCount = countNonEmptyCells(existing);
+      if (occupiedCount > 0) {
+        return {
+          success: false,
+          needsConfirmation: true,
+          code: 'TARGET_NOT_EMPTY',
+          message: 'The target range ' + formatRangeA1(startRow, startCol, numRows, numCols) + ' contains ' + occupiedCount + ' non-empty cell(s).',
+          rows: numRows,
+          columns: numCols
+        };
+      }
+    }
+
+    targetRange.setValues(values);
+    styleAgentTable(sheet, startRow, startCol, numRows, numCols, writeOptions.includeHeaders !== false);
+    SpreadsheetApp.flush();
+
+    return {
+      success: true,
+      message: 'Wrote table starting at ' + formatCellA1(startRow, startCol) + '.',
+      runId: run.id,
+      rows: tableResult.dataRows,
+      columns: numCols,
+      costDollars: run.costDollars || null,
+      usage: run.usage || null
+    };
+  } catch (e) {
+    Logger.log('writeAgentRunToSheet Error: ' + e);
+    return { success: false, message: 'Operation failed: ' + e.message };
+  }
+}
+
+/**
+ * Fetches a run from the Agent API.
+ * @param {string} apiKey Exa API key
+ * @param {string} runId Agent run ID
+ * @return {Object} Fetch result
+ */
+function fetchAgentRun(apiKey, runId) {
+  if (!isValidAgentRunId(runId)) {
+    return { success: false, message: 'Invalid Agent run ID.' };
+  }
+
+  try {
+    var response = UrlFetchApp.fetch(EXA_AGENT_CONFIG.endpoint + '/' + encodeURIComponent(runId), {
+      method: 'get',
+      headers: {
+        'x-api-key': apiKey,
+        'Exa-Beta': EXA_AGENT_CONFIG.betaHeader,
+        'x-exa-integration': 'exa-for-sheets',
+        'User-Agent': 'exa-for-sheets 2.0'
+      },
+      muteHttpExceptions: true
+    });
+
+    var responseCode = response.getResponseCode();
+    var responseBody = response.getContentText();
+
+    if (responseCode === 200) {
+      return { success: true, run: JSON.parse(responseBody) };
+    }
+
+    if (responseCode === 429) {
+      return {
+        success: false,
+        retryable: true,
+        retryAfterMs: getRetryAfterMs(response),
+        message: 'Exa Agent is rate limited. Waiting before checking again.'
+      };
+    }
+
+    return {
+      success: false,
+      message: parseAgentApiError(responseCode, responseBody, 'Failed to fetch Agent run.')
+    };
+  } catch (e) {
+    Logger.log('fetchAgentRun Error: ' + e);
+    return { success: false, message: 'Script Error: ' + e.message };
+  }
+}
+
+/**
+ * Creates a compact run object for sidebar polling.
+ * @param {Object} run Full Agent run
+ * @return {Object} Summary
+ */
+function summarizeAgentRun(run) {
+  run = run || {};
+  return {
+    id: run.id || '',
+    status: run.status || '',
+    stopReason: run.stopReason || null,
+    createdAt: run.createdAt || null,
+    completedAt: run.completedAt || null,
+    outputText: run.output && run.output.text ? run.output.text : '',
+    hasStructured: !!(run.output && run.output.structured),
+    rowCount: countAgentStructuredRows(run, 'rows'),
+    usage: run.usage || null,
+    costDollars: run.costDollars || null
+  };
+}
+
+/**
+ * Builds a 2D values matrix from Agent structured output.
+ * @param {Object} run Agent run
+ * @param {Object} tableConfig Table config
+ * @param {boolean} includeHeaders Whether to include headers
+ * @param {boolean} includeSources Whether to append a Sources column from grounding
+ * @return {Object} Values result
+ */
+function buildAgentSheetValues(run, tableConfig, includeHeaders, includeSources) {
+  var structured = run && run.output ? run.output.structured : null;
+  if (!structured) {
+    return { success: false, message: 'Agent run completed, but no structured output was returned.' };
+  }
+
+  var rootKey = tableConfig && tableConfig.rootKey ? tableConfig.rootKey : 'rows';
+  var records = null;
+  var actualRootKey = rootKey;
+
+  if (Array.isArray(structured)) {
+    records = structured;
+    actualRootKey = '';
+  } else if (Array.isArray(structured[rootKey])) {
+    records = structured[rootKey];
+  } else {
+    Object.keys(structured).some(function(key) {
+      if (Array.isArray(structured[key])) {
+        records = structured[key];
+        actualRootKey = key;
+        return true;
+      }
+      return false;
+    });
+  }
+
+  if (!records || records.length === 0) {
+    return { success: false, message: 'Agent structured output did not contain any table rows.' };
+  }
+
+  var columns = normalizeAgentTableConfigColumns(tableConfig, records[0], structured.columns);
+  if (columns.length === 0) {
+    return { success: false, message: 'Could not infer table columns from Agent output.' };
+  }
+
+  var values = [];
+  if (includeHeaders) {
+    var headerRow = columns.map(function(column) { return column.label || humanizeAgentColumnLabel(column.key); });
+    if (includeSources) {
+      headerRow.push('Sources');
+    }
+    values.push(headerRow);
+  }
+
+  var dataValues = [];
+  records.forEach(function(record, rowIndex) {
+    var row = columns.map(function(column, columnIndex) {
+      return formatAgentCellValue(getAgentRecordValue(record, column, columnIndex));
+    });
+
+    if (includeSources) {
+      row.push(getAgentGroundingSourcesForRow(run, actualRootKey, rowIndex));
+    }
+
+    if (rowHasAgentValue(row)) {
+      dataValues.push(row);
+    }
+  });
+
+  if (dataValues.length === 0) {
+    return {
+      success: false,
+      message: 'Agent returned column headers but no usable data rows. Try running again, or open Choose columns and provide the exact columns you want.'
+    };
+  }
+
+  values = values.concat(dataValues);
+
+  return {
+    success: true,
+    values: values,
+    dataRows: dataValues.length,
+    dataColumns: columns.length + (includeSources ? 1 : 0)
+  };
+}
+
+/**
+ * Normalizes stored table columns or infers them from a record.
+ * @param {Object} tableConfig Table config
+ * @param {Object} firstRecord First output record
+ * @return {Object[]} Columns
+ */
+function normalizeAgentTableConfigColumns(tableConfig, firstRecord, generatedColumnLabels) {
+  if (tableConfig && Array.isArray(tableConfig.columns) && tableConfig.columns.length > 0) {
+    return tableConfig.columns
+      .filter(function(column) { return column && column.key; })
+      .map(function(column) {
+        return {
+          key: column.key,
+          label: column.label || humanizeAgentColumnLabel(column.key),
+          type: column.type || 'string'
+        };
+      });
+  }
+
+  if (Array.isArray(generatedColumnLabels) && generatedColumnLabels.length > 0) {
+    return generatedColumnLabels
+      .map(function(label) { return String(label || '').trim(); })
+      .filter(function(label) { return label.length > 0; })
+      .map(function(label) {
+        return {
+          key: label,
+          label: label,
+          type: 'string'
+        };
+      });
+  }
+
+  if (!firstRecord || typeof firstRecord !== 'object' || Array.isArray(firstRecord)) {
+    return [];
+  }
+
+  return Object.keys(firstRecord).map(function(key) {
+    return {
+      key: key,
+      label: humanizeAgentColumnLabel(key),
+      type: Array.isArray(firstRecord[key]) ? 'array' : 'string'
+    };
+  });
+}
+
+/**
+ * Reads a cell value from an Agent row, allowing generated labels to differ in casing or separators.
+ * @param {Object|Array} record Agent row object
+ * @param {Object} column Column definition
+ * @param {number} columnIndex Column index
+ * @return {*} Raw cell value
+ */
+function getAgentRecordValue(record, column, columnIndex) {
+  if (Array.isArray(record)) {
+    return record[columnIndex];
+  }
+
+  if (!record || typeof record !== 'object' || !column) {
+    return '';
+  }
+
+  if (Array.isArray(record.cells)) {
+    return record.cells[columnIndex];
+  }
+
+  if (Object.prototype.hasOwnProperty.call(record, column.key)) {
+    return record[column.key];
+  }
+
+  var candidates = [normalizeAgentColumnKey(column.key, {})];
+  if (column.label) {
+    candidates.push(normalizeAgentColumnKey(column.label, {}));
+  }
+
+  var keys = Object.keys(record);
+  for (var i = 0; i < keys.length; i++) {
+    var normalizedKey = normalizeAgentColumnKey(keys[i], {});
+    if (candidates.indexOf(normalizedKey) !== -1) {
+      return record[keys[i]];
+    }
+  }
+
+  return '';
+}
+
+/**
+ * Checks whether a rendered row has at least one real value.
+ * @param {Array} row Rendered row values
+ * @return {boolean} True when the row has content
+ */
+function rowHasAgentValue(row) {
+  return row.some(function(value) {
+    if (value === null || value === undefined) return false;
+    return String(value).trim() !== '';
+  });
+}
+
+/**
+ * Counts rows in structured Agent output.
+ * @param {Object} run Agent run
+ * @param {string} rootKey Expected root array key
+ * @return {number} Row count
+ */
+function countAgentStructuredRows(run, rootKey) {
+  var structured = run && run.output ? run.output.structured : null;
+  if (!structured) return 0;
+  if (Array.isArray(structured)) return structured.length;
+  if (rootKey && Array.isArray(structured[rootKey])) return structured[rootKey].length;
+
+  var count = 0;
+  Object.keys(structured).some(function(key) {
+    if (Array.isArray(structured[key])) {
+      count = structured[key].length;
+      return true;
+    }
+    return false;
+  });
+  return count;
+}
+
+/**
+ * Formats a structured value for a Google Sheets cell.
+ * @param {*} value Cell value
+ * @return {string|number|boolean} Sheets-compatible value
+ */
+function formatAgentCellValue(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(function(item) {
+      return (item && typeof item === 'object') ? JSON.stringify(item) : String(item);
+    }).join(', ');
+  }
+
+  if (typeof value === 'object') {
+    return JSON.stringify(value);
+  }
+
+  return value;
+}
+
+/**
+ * Gets unique citation URLs for a row from Agent grounding metadata.
+ * @param {Object} run Agent run
+ * @param {string} rootKey Structured output root key
+ * @param {number} rowIndex Row index
+ * @return {string} Comma-separated URLs
+ */
+function getAgentGroundingSourcesForRow(run, rootKey, rowIndex) {
+  var grounding = run && run.output && Array.isArray(run.output.grounding) ? run.output.grounding : [];
+  if (!rootKey) {
+    return '';
+  }
+
+  var prefix = 'structured.' + rootKey + '[' + rowIndex + ']';
+  var seen = {};
+  var urls = [];
+
+  grounding.forEach(function(item) {
+    if (!item || typeof item.field !== 'string' || item.field.indexOf(prefix) !== 0) {
+      return;
+    }
+
+    (item.citations || []).forEach(function(citation) {
+      if (citation && citation.url && !seen[citation.url]) {
+        seen[citation.url] = true;
+        urls.push(citation.url);
+      }
+    });
+  });
+
+  return urls.join(', ');
+}
+
+/**
+ * Parses an API error response into a user-facing message.
+ * @param {number} responseCode HTTP status
+ * @param {string} responseBody Raw body
+ * @param {string} fallback Fallback message
+ * @return {string} User-facing error
+ */
+function parseAgentApiError(responseCode, responseBody, fallback) {
+  var message = fallback + ' Status ' + responseCode + '.';
+  try {
+    var parsed = JSON.parse(responseBody);
+    var detail = parsed.error || parsed.message || responseBody;
+    message += ' Message: ' + (typeof detail === 'string' ? detail : JSON.stringify(detail));
+  } catch (e) {
+    if (responseBody) {
+      message += ' Response: ' + responseBody;
+    }
+  }
+  return message;
+}
+
+/**
+ * Reads Retry-After from an HTTP response and converts it to milliseconds.
+ * @param {HTTPResponse} response UrlFetchApp response
+ * @return {number} Delay in milliseconds
+ */
+function getRetryAfterMs(response) {
+  try {
+    var headers = response && response.getHeaders ? response.getHeaders() : {};
+    var retryAfter = headers['Retry-After'] || headers['retry-after'];
+    if (!retryAfter) return 10000;
+
+    var seconds = parseInt(retryAfter, 10);
+    if (seconds && seconds > 0) {
+      return Math.min(seconds * 1000, 60000);
+    }
+
+    var retryDate = new Date(retryAfter).getTime();
+    if (!isNaN(retryDate)) {
+      return Math.min(Math.max(retryDate - Date.now(), 1000), 60000);
+    }
+  } catch (e) {
+    Logger.log('getRetryAfterMs skipped: ' + e);
+  }
+
+  return 10000;
+}
+
+/**
+ * Validates an Agent run ID before placing it in a URL.
+ * @param {string} runId Agent run ID
+ * @return {boolean} True if valid
+ */
+function isValidAgentRunId(runId) {
+  return typeof runId === 'string' && /^[A-Za-z0-9_.:-]+$/.test(runId);
+}
+
+/**
+ * Normalizes a user-entered start cell.
+ * @param {*} startCell Start cell from the sidebar
+ * @return {string} Uppercase cell address or empty string
+ */
+function normalizeAgentStartCell(startCell) {
+  return (typeof startCell === 'string') ? startCell.trim().toUpperCase() : '';
+}
+
+/**
+ * Validates a simple A1-style single-cell address.
+ * @param {string} startCell Cell address
+ * @return {boolean} True if valid
+ */
+function isValidAgentStartCell(startCell) {
+  return typeof startCell === 'string' && /^[A-Z]{1,3}[1-9][0-9]*$/.test(startCell);
+}
+
+/**
+ * Reads the currently selected cell when the Agent run starts.
+ * @return {string} Active cell address, or A1 if unavailable
+ */
+function getCurrentAgentStartCell() {
+  try {
+    var sheet = SpreadsheetApp.getActiveSheet();
+    var activeRange = sheet && sheet.getActiveRange ? sheet.getActiveRange() : null;
+    if (activeRange && activeRange.getRow && activeRange.getColumn) {
+      return formatCellA1(activeRange.getRow(), activeRange.getColumn());
+    }
+  } catch (e) {
+    Logger.log('getCurrentAgentStartCell skipped: ' + e);
+  }
+
+  return 'A1';
+}
+
+/**
+ * Counts non-empty values in a 2D range array.
+ * @param {Array[]} values Range values
+ * @return {number} Count
+ */
+function countNonEmptyCells(values) {
+  var count = 0;
+  values.forEach(function(row) {
+    row.forEach(function(value) {
+      if (value !== '' && value !== null && value !== undefined) {
+        count++;
+      }
+    });
+  });
+  return count;
+}
+
+/**
+ * Expands the active sheet when the table would exceed current bounds.
+ * @param {Sheet} sheet Active sheet
+ * @param {number} requiredRows Last required row
+ * @param {number} requiredCols Last required column
+ */
+function ensureSheetSize(sheet, requiredRows, requiredCols) {
+  if (sheet.getMaxRows && sheet.insertRowsAfter && requiredRows > sheet.getMaxRows()) {
+    sheet.insertRowsAfter(sheet.getMaxRows(), requiredRows - sheet.getMaxRows());
+  }
+
+  if (sheet.getMaxColumns && sheet.insertColumnsAfter && requiredCols > sheet.getMaxColumns()) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), requiredCols - sheet.getMaxColumns());
+  }
+}
+
+/**
+ * Applies light header styling when supported by the Sheets runtime.
+ * @param {Sheet} sheet Active sheet
+ * @param {number} startRow Start row
+ * @param {number} startCol Start column
+ * @param {number} numRows Number of rows
+ * @param {number} numCols Number of columns
+ * @param {boolean} includeHeaders Whether headers were written
+ */
+function styleAgentTable(sheet, startRow, startCol, numRows, numCols, includeHeaders) {
+  try {
+    if (includeHeaders && sheet.getRange) {
+      var headerRange = sheet.getRange(startRow, startCol, 1, numCols);
+      if (headerRange.setFontWeight) headerRange.setFontWeight('bold');
+      if (headerRange.setBackground) headerRange.setBackground('#EFF6FF');
+    }
+
+    if (sheet.autoResizeColumns) {
+      sheet.autoResizeColumns(startCol, numCols);
+    }
+  } catch (e) {
+    Logger.log('styleAgentTable skipped: ' + e);
+  }
+}
+
+/**
+ * Formats a cell coordinate as A1 notation.
+ * @param {number} row Row number
+ * @param {number} col Column number
+ * @return {string} A1 coordinate
+ */
+function formatCellA1(row, col) {
+  var letters = '';
+  var current = col;
+  while (current > 0) {
+    var remainder = (current - 1) % 26;
+    letters = String.fromCharCode(65 + remainder) + letters;
+    current = Math.floor((current - 1) / 26);
+  }
+  return letters + row;
+}
+
+/**
+ * Formats a range coordinate as A1 notation.
+ * @param {number} row Start row
+ * @param {number} col Start column
+ * @param {number} numRows Number of rows
+ * @param {number} numCols Number of columns
+ * @return {string} A1 range
+ */
+function formatRangeA1(row, col, numRows, numCols) {
+  return formatCellA1(row, col) + ':' + formatCellA1(row + numRows - 1, col + numCols - 1);
+}
+
+/**
  * Refreshes all selected cells containing Exa functions by forcing recalculation.
  * Processes all cells in parallel for optimal performance.
  * Properly handles array-returning functions by clearing spilled values.
- * 
+ *
  * @param {string} operation The operation to perform (always 'refresh')
  * @return {Object} Result object with success flag and message
  */
@@ -998,18 +2037,18 @@ function processBatchOperation(operation) {
   try {
     const sheet = SpreadsheetApp.getActiveSheet();
     const selection = sheet.getActiveRange();
-    
+
     if (!selection) {
-      return { 
-        success: false, 
+      return {
+        success: false,
         message: 'No cells selected. Please select cells containing Exa functions.'
       };
     }
-    
+
     // Get all formulas and filter for Exa functions
     const formulas = selection.getFormulas();
     const exaCells = [];
-    
+
     formulas.forEach((row, rowIndex) => {
       row.forEach((formula, colIndex) => {
         // Match =EXA( or =EXA_ to include both simplified EXA() and EXA_ANSWER, EXA_SEARCH, etc.
@@ -1023,41 +2062,41 @@ function processBatchOperation(operation) {
         }
       });
     });
-    
+
     if (exaCells.length === 0) {
       const totalCells = formulas.flat().length;
       const cellText = totalCells === 1 ? 'cell' : 'cells';
-      return { 
-        success: false, 
+      return {
+        success: false,
         message: `No Exa functions found in the ${totalCells} selected ${cellText}.`
       };
     }
-    
+
     // For each Exa function cell, clear potential spilled values
     exaCells.forEach(item => {
       // Clear the formula cell
       item.cell.setFormula('');
-      
+
       // Clear potential spilled values below and to the right
       // Array formulas can spill vertically (for EXA_SEARCH, EXA_FINDSIMILAR)
       // We'll clear up to 100 rows below and 10 columns to the right to be safe
       const maxRow = Math.min(item.row + 100, sheet.getMaxRows());
       const maxCol = Math.min(item.col + 10, sheet.getMaxColumns());
-      
+
       if (maxRow > item.row || maxCol > item.col) {
         const numRows = maxRow - item.row + 1;
         const numCols = maxCol - item.col + 1;
         const spillRange = sheet.getRange(item.row, item.col, numRows, numCols);
-        
+
         // Only clear cells that don't have formulas (these are spilled values)
         const spillFormulas = spillRange.getFormulas();
         const spillValues = spillRange.getValues();
-        
+
         spillFormulas.forEach((formulaRow, rowIdx) => {
           formulaRow.forEach((formula, colIdx) => {
             // Skip the first cell (it's the formula cell we already cleared)
             if (rowIdx === 0 && colIdx === 0) return;
-            
+
             // If cell has no formula but has a value, it's likely a spilled value
             if (!formula && spillValues[rowIdx][colIdx] !== '') {
               sheet.getRange(item.row + rowIdx, item.col + colIdx).clear();
@@ -1066,23 +2105,23 @@ function processBatchOperation(operation) {
         });
       }
     });
-    
+
     SpreadsheetApp.flush();
-    
+
     // Restore all formulas at once
     exaCells.forEach(item => item.cell.setFormula(item.formula));
     SpreadsheetApp.flush();
-    
+
     const cellText = exaCells.length === 1 ? 'cell' : 'cells';
-    return { 
-      success: true, 
+    return {
+      success: true,
       message: `Successfully refreshed ${exaCells.length} ${cellText}.`
     };
-    
+
   } catch (e) {
     Logger.log(`Error in processBatchOperation: ${e}`);
-    return { 
-      success: false, 
+    return {
+      success: false,
       message: `Operation failed: ${e.message}`
     };
   }
@@ -1092,25 +2131,25 @@ function processBatchOperation(operation) {
  * Converts selected cells containing Exa functions to their static values.
  * This prevents automatic recalculation and unexpected API charges.
  * The formulas are replaced with their current values, so they won't refresh.
- * 
+ *
  * @return {Object} Result object with success flag and message
  */
 function convertToValues() {
   try {
     const sheet = SpreadsheetApp.getActiveSheet();
     const selection = sheet.getActiveRange();
-    
+
     if (!selection) {
-      return { 
-        success: false, 
+      return {
+        success: false,
         message: 'No cells selected. Please select cells containing Exa functions.'
       };
     }
-    
+
     const formulas = selection.getFormulas();
     const values = selection.getValues();
     const exaCells = [];
-    
+
     formulas.forEach((row, rowIndex) => {
       row.forEach((formula, colIndex) => {
         // Match =EXA( or =EXA_ to include both simplified EXA() and EXA_ANSWER, EXA_SEARCH, etc.
@@ -1124,34 +2163,34 @@ function convertToValues() {
         }
       });
     });
-    
+
     if (exaCells.length === 0) {
       const totalCells = formulas.flat().length;
       const cellText = totalCells === 1 ? 'cell' : 'cells';
-      return { 
-        success: false, 
+      return {
+        success: false,
         message: `No Exa functions found in the ${totalCells} selected ${cellText}.`
       };
     }
-    
+
     // Replace formulas with their values
     exaCells.forEach(item => {
       const cell = selection.getCell(item.row + 1, item.col + 1);
       cell.setValue(item.value);
     });
-    
+
     SpreadsheetApp.flush();
-    
+
     const cellText = exaCells.length === 1 ? 'cell' : 'cells';
-    return { 
-      success: true, 
+    return {
+      success: true,
       message: `Converted ${exaCells.length} ${cellText} to static values. These cells will no longer auto-refresh.`
     };
-    
+
   } catch (e) {
     Logger.log(`Error in convertToValues: ${e}`);
-    return { 
-      success: false, 
+    return {
+      success: false,
       message: `Operation failed: ${e.message}`
     };
   }
